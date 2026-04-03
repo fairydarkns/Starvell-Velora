@@ -1,0 +1,41 @@
+# Main user config
+configs/_main.cfg
+
+# Runtime content inside base folders
+storage/*
+
+logs/*
+
+backups/*
+
+# Python cache/build
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / tools
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local env files if they appear again
+.env
+.env.*
