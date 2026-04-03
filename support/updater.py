@@ -14,7 +14,7 @@ UPDATE_ALLOWLIST = [
     "domain",
     "support",
     "config_wizard.py",
-    "first-run.py",
+    "first_run.py",
     "main.py",
     "version.py",
     "requirements.txt",

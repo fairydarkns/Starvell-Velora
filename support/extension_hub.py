@@ -118,10 +118,22 @@ class ExtensionHub:
                 continue
             for candidate_name in ("module.py", "plugin.py", "__init__.py"):
                 candidate = directory / candidate_name
-                if candidate.exists():
+                if candidate.exists() and self._is_entrypoint_candidate(candidate):
                     discovered.append(candidate)
                     break
         return discovered
+
+    @staticmethod
+    def _is_entrypoint_candidate(file_path: Path) -> bool:
+        """Отсекает служебные пакеты без плагинных метаданных."""
+        if file_path.name != "__init__.py":
+            return True
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            return False
+        required_markers = ("NAME", "VERSION", "DESCRIPTION", "AUTHOR", "UUID")
+        return all(f"{marker} =" in content for marker in required_markers)
 
     def load_extension_module(self, file_path: Path) -> tuple[ModuleType, dict]:
         relative_parts = file_path.relative_to(self.extensions_dir).with_suffix("").parts

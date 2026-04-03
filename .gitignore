@@ -8,6 +8,8 @@ logs/*
 
 backups/*
 
+plugins/*
+
 # Python cache/build
 __pycache__/
 *.py[cod]
