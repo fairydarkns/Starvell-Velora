@@ -31,7 +31,6 @@ CONFIG_LAYOUT: OrderedDict[str, OrderedDict[str, str]] = OrderedDict(
                 [
                     ("token", ""),
                     ("secretkeyhash", ""),
-                    ("adminids", "[]"),
                     ("enabled", "true"),
                 ]
             ),
@@ -254,19 +253,6 @@ def _read_admin_registry() -> dict[str, Any]:
         return {}
 
 
-def _parse_admin_ids(raw_value: str) -> tuple[int, ...]:
-    cleaned = raw_value.strip().strip("[]")
-    if not cleaned:
-        return ()
-    result: list[int] = []
-    for chunk in cleaned.split(","):
-        item = chunk.strip()
-        if not item:
-            continue
-        result.append(int(item))
-    return tuple(result)
-
-
 def _default_admin_prefs() -> dict[str, Any]:
     return {
         "enabled": True,
@@ -293,18 +279,11 @@ def _write_admin_registry(payload: dict[str, Any]) -> None:
     )
 
 
-def _collect_admin_registry(
-    interactive: bool,
-    seed_admin_ids: tuple[int, ...] = (),
-) -> dict[str, Any]:
+def _collect_admin_registry() -> dict[str, Any]:
     registry = _read_admin_registry()
     normalized: dict[str, Any] = {}
     for admin_id, prefs in registry.items():
         normalized[str(admin_id)] = _default_admin_prefs() | (prefs or {})
-
-    if not normalized and seed_admin_ids:
-        for admin_id in seed_admin_ids:
-            normalized[str(admin_id)] = _default_admin_prefs()
 
     return normalized
 
@@ -364,10 +343,24 @@ def _prompt_proxy(raw_prompt: str, *, allow_scheme_choice: bool) -> dict[str, st
 
 def _apply_config_layout(parser: configparser.ConfigParser) -> bool:
     changed = False
+
+    allowed_sections = {section.lower() for section in CONFIG_LAYOUT.keys()}
+    for section in list(parser.sections()):
+        if section.lower() not in allowed_sections:
+            parser.remove_section(section)
+            changed = True
+
     for section, fields in CONFIG_LAYOUT.items():
         if not parser.has_section(section):
             parser.add_section(section)
             changed = True
+
+        allowed_keys = {key.lower() for key in fields.keys()}
+        for key in list(parser[section].keys()):
+            if key.lower() not in allowed_keys:
+                parser.remove_option(section, key)
+                changed = True
+
         for key, default_value in fields.items():
             if not parser.has_option(section, key):
                 parser.set(section, key, default_value)
@@ -527,10 +520,10 @@ def ensure_main_config(interactive: bool = True) -> configparser.ConfigParser:
         joined = ", ".join(missing_required)
         raise RuntimeError(f"Config is incomplete: {joined}")
 
-    seed_admin_ids = _parse_admin_ids(parser.get("Telegram", "adminids", fallback=""))
-    admin_registry = _collect_admin_registry(interactive=interactive, seed_admin_ids=seed_admin_ids)
-    final_admin_ids = tuple(int(item) for item in admin_registry.keys())
-    parser.set("Telegram", "adminids", str(list(final_admin_ids)))
+    admin_registry = _collect_admin_registry()
+    if parser.has_option("Telegram", "adminids"):
+        parser.remove_option("Telegram", "adminids")
+        changed = True
 
     registry_changed = admin_registry != _read_admin_registry()
     if changed or first_run or registry_changed or not ADMINS_PATH.exists():

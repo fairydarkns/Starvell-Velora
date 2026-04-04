@@ -159,7 +159,7 @@ def get_main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text="🧰 Дополнительные настройки",
+                text="🛠️ Дополнительные настройки",
                 callback_data=CBT.MAIN_PAGE_2
             ),
         ],

@@ -69,8 +69,7 @@ class ConfigManager:
         self._config['Telegram'] = {
             'enabled': 'true',
             'token': '',
-            'secretKeyHash': '',
-            'adminIds': '[]'
+            'secretKeyHash': ''
         }
         
         self._config['Notifications'] = {
@@ -163,8 +162,7 @@ class ConfigManager:
             'Telegram': {
                 'enabled': 'true',
                 'token': '',
-                'secretKeyHash': '',
-                'adminIds': '[]'
+                'secretKeyHash': ''
             },
             'Notifications': {
                 'checkInterval': '30',
@@ -344,7 +342,55 @@ _config_manager = ConfigManager(create_if_missing=False)
 
 class BotConfig:
     """Конфигурация бота"""
-    
+
+    @staticmethod
+    def _admins_registry_path() -> Path:
+        return Path(BotConfig.STORAGE_DIR()) / "telegram" / "admins.json"
+
+    @staticmethod
+    def _default_admin_entry() -> Dict[str, Any]:
+        return {
+            "enabled": True,
+            "bot_start": True,
+            "bot_stop": False,
+            "new_messages": True,
+            "new_orders": True,
+            "support_messages": True,
+            "order_completed": True,
+            "order_confirmed": True,
+            "backup_created": True,
+            "backup_failed": True,
+            "update_started": True,
+            "update_finished": True,
+            "update_failed": True,
+            "errors": True,
+        }
+
+    @classmethod
+    def _read_admin_registry(cls) -> Dict[str, Any]:
+        path = cls._admins_registry_path()
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        normalized: Dict[str, Any] = {}
+        for admin_id, prefs in payload.items():
+            normalized[str(admin_id)] = cls._default_admin_entry() | (prefs or {})
+        return normalized
+
+    @classmethod
+    def _write_admin_registry(cls, payload: Dict[str, Any]) -> None:
+        path = cls._admins_registry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
     @classmethod
     def reload(cls):
         """Перезагрузить конфигурацию"""
@@ -360,14 +406,22 @@ class BotConfig:
     def PASSWORD_HASH() -> str:
         return _config_manager.get('Telegram', 'secretKeyHash', '')
     
-    @staticmethod
-    def ADMIN_IDS() -> list:
-        return _config_manager.get('Telegram', 'adminIds', [])
+    @classmethod
+    def ADMIN_IDS(cls) -> list:
+        return [int(admin_id) for admin_id in cls._read_admin_registry().keys()]
     
-    @staticmethod
-    def set_admin_ids(admin_ids: list):
-        """Установить список админов"""
-        _config_manager.set('Telegram', 'adminIds', admin_ids)
+    @classmethod
+    def set_admin_ids(cls, admin_ids: list):
+        """Установить список админов в storage/telegram/admins.json"""
+        existing = cls._read_admin_registry()
+        normalized: Dict[str, Any] = {}
+        for admin_id in admin_ids:
+            try:
+                key = str(int(admin_id))
+            except Exception:
+                continue
+            normalized[key] = cls._default_admin_entry() | existing.get(key, {})
+        cls._write_admin_registry(normalized)
     
     # === Starvell ===
     @staticmethod
