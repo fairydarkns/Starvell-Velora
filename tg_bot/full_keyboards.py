@@ -337,7 +337,7 @@ def get_notifications_menu(
         ],
         [
             InlineKeyboardButton(
-                text=switch_text("Все новые сообщения", all_messages),
+                text=switch_text("Прочитанные сообщения", all_messages),
                 callback_data=CBT.NOTIF_ALL_MESSAGES
             ),
             InlineKeyboardButton(
