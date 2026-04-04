@@ -313,7 +313,7 @@ async def callback_remove_auth_user(callback: CallbackQuery):
     
     # Удаляем
     admin_ids.remove(user_id)
-    BotConfig.update(**{"Telegram.adminIds": admin_ids})
+    BotConfig.set_admin_ids(admin_ids)
     
     await callback.answer(f"✅ Пользователь {user_id} удалён", show_alert=False)
     

@@ -75,6 +75,27 @@ def _log_profile_summary(user: dict) -> None:
     )
 
 
+async def _notify_bot_stopped(notifications, user: dict) -> None:
+    if not BotConfig.NOTIFY_BOT_STOP():
+        return
+
+    try:
+        from datetime import datetime
+        current_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        message = (
+            f"<b>Аккаунт:</b> {user.get('username', 'Неизвестно')}\n"
+            f"<b>ID:</b> <code>{user.get('id', 'N/A')}</code>\n\n"
+            f"<b>Время остановки:</b> <code>{current_time}</code>\n"
+        )
+        await notifications.notify_all_admins(
+            NotificationType.BOT_STOPPED,
+            message,
+            force=False,
+        )
+    except Exception as exc:
+        logger.warning(f"Не удалось отправить уведомление об остановке: {exc}")
+
+
 async def main():
     """Главная функция бота (вызывается из главного main.py)"""
     _log_startup_banner()
@@ -242,6 +263,7 @@ async def main():
         "auto_response": auto_response,
         "autoticket_service": autoticket_service,
         "extension_hub": extension_hub,
+        "notifications": notifications,
     })
     
     # Фоновые задачи
@@ -289,6 +311,8 @@ async def main():
     finally:
         # Очистка
         logger.info("Остановка бота...")
+
+        await _notify_bot_stopped(notifications, user)
         
         # Запускаем stop-хуки расширений
         await extension_hub.execute_handlers(extension_hub.stop_handlers, bot, starvell, db, extension_hub)

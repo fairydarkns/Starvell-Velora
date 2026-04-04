@@ -4,12 +4,13 @@ import asyncio
 import logging
 import re
 from typing import Optional
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 from support.backup import create_user_backup
 from support.process_control import restart_current_process
 from support.updater import apply_update_from_archive
-from version import UPDATE_ARCHIVE_URL, VERSION, VERSION_URL
+from version import GITHUB_REPO, UPDATE_BRANCH_FALLBACKS, VERSION
 
 
 logger = logging.getLogger("ManualUpdate")
@@ -23,6 +24,9 @@ class ManualUpdateService:
         self.current_version = VERSION
         self.latest_version: Optional[str] = None
         self.update_available = False
+        self._resolved_branch: Optional[str] = None
+        self._resolved_version_url: Optional[str] = None
+        self._resolved_archive_url: Optional[str] = None
 
     async def check_for_updates(self) -> bool:
         try:
@@ -38,8 +42,31 @@ class ManualUpdateService:
             raise RuntimeError(f"Не удалось проверить обновления: {error}") from error
 
     def _download_version_file(self) -> str:
-        with urlopen(VERSION_URL, timeout=10) as response:  # noqa: S310
-            return response.read().decode("utf-8")
+        last_error: Exception | None = None
+        for branch in UPDATE_BRANCH_FALLBACKS:
+            version_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{branch}/version.py"
+            archive_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/{branch}.zip"
+            try:
+                with urlopen(version_url, timeout=10) as response:  # noqa: S310
+                    self._resolved_branch = branch
+                    self._resolved_version_url = version_url
+                    self._resolved_archive_url = archive_url
+                    return response.read().decode("utf-8")
+            except HTTPError as error:
+                last_error = error
+                if error.code == 404:
+                    continue
+                raise
+            except Exception as error:  # noqa: BLE001
+                last_error = error
+                raise
+
+        if last_error is None:
+            raise RuntimeError("Не удалось получить version.py ни из одной ветки")
+        raise RuntimeError(
+            "Не удалось получить version.py из GitHub. "
+            f"Проверьте репозиторий {GITHUB_REPO} и доступные ветки {', '.join(UPDATE_BRANCH_FALLBACKS)}"
+        ) from last_error
 
     @staticmethod
     def _compare_versions(current: str, latest: str) -> bool:
@@ -54,12 +81,18 @@ class ManualUpdateService:
 
     async def perform_update(self) -> dict:
         try:
+            if not self._resolved_archive_url:
+                await self.check_for_updates()
             backup_path = await asyncio.to_thread(create_user_backup, self.project_root)
-            await asyncio.to_thread(apply_update_from_archive, self.project_root, UPDATE_ARCHIVE_URL)
+            await asyncio.to_thread(apply_update_from_archive, self.project_root, self._resolved_archive_url)
             return {
                 "success": True,
                 "message": "✅ Обновление установлено.",
-                "output": f"Backup: {backup_path.name}\nArchive: {UPDATE_ARCHIVE_URL}",
+                "output": (
+                    f"Backup: {backup_path.name}\n"
+                    f"Branch: {self._resolved_branch}\n"
+                    f"Archive: {self._resolved_archive_url}"
+                ),
                 "backup_path": str(backup_path),
             }
         except Exception as error:  # noqa: BLE001

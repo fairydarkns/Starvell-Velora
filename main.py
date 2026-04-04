@@ -48,4 +48,9 @@ async def run() -> None:
     await telegram_runtime_main()
 
 
-asyncio.run(run())
+def main() -> None:
+    asyncio.run(run())
+
+
+if __name__ == "__main__":
+    main()

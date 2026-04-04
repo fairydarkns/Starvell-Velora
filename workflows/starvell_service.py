@@ -157,7 +157,6 @@ class StarvellService:
                 pass
 
             result = await self.api.send_message(chat_id, content)
-            await self.db.add_sent_message(chat_id, content)
             return result
     
     async def mark_chat_as_read(self, chat_id: str) -> bool:
@@ -284,6 +283,7 @@ class StarvellService:
         logger.debug(f"📬 Получено чатов для проверки сообщений: {len(chats)}")
 
         auto_read_enabled = BotConfig.AUTO_READ_ENABLED()
+        notify_all_messages = BotConfig.NOTIFY_ALL_MESSAGES()
         my_user = self.last_user_info.get("user", {}) if self.last_user_info else {}
         my_user_id = str(my_user.get("id", ""))
 
@@ -326,6 +326,11 @@ class StarvellService:
                     await self.mark_chat_as_read(chat_id)
                 continue
 
+            unread_count = chat.get("unreadMessageCount") or chat.get("unreadCount") or 0
+            if not notify_all_messages and unread_count <= 0:
+                await self.db.set_last_message(chat_id, latest_id)
+                continue
+
             messages = await self.get_messages(chat_id, interlocutor_id, limit=20)
             if not messages:
                 await self.db.set_last_message(chat_id, latest_id)
@@ -341,6 +346,9 @@ class StarvellService:
                     "message": msg,
                     "chat": chat,
                 })
+
+            if chat_new_messages and not notify_all_messages and unread_count > 0:
+                chat_new_messages = chat_new_messages[:unread_count]
 
             if chat_new_messages:
                 new_messages.extend(chat_new_messages)

@@ -63,6 +63,8 @@ class CBT:
     
     # Уведомления
     NOTIF_MESSAGES = "notif:messages"
+    NOTIF_ALL_MESSAGES = "notif:all_messages"
+    NOTIF_OWN_MESSAGES = "notif:own_messages"
     NOTIF_SUPPORT_MESSAGES = "notif:support"
     NOTIF_ORDERS = "notif:orders"
     NOTIF_RESTORE = "notif:restore"
@@ -159,7 +161,7 @@ def get_main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text="🛠️ Дополнительные настройки",
+                text="🧰 Дополнительные настройки",
                 callback_data=CBT.MAIN_PAGE_2
             ),
         ],
@@ -304,6 +306,8 @@ def get_notifications_menu(
     review: bool = False,
     auto_responses: bool = False,
     support_messages: bool = True,
+    own_messages: bool = False,
+    all_messages: bool = False,
 ) -> InlineKeyboardMarkup:
     """Меню настроек уведомлений
 
@@ -329,6 +333,16 @@ def get_notifications_menu(
             InlineKeyboardButton(
                 text=switch_text("Новые заказы", orders),
                 callback_data=CBT.NOTIF_ORDERS
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=switch_text("Все новые сообщения", all_messages),
+                callback_data=CBT.NOTIF_ALL_MESSAGES
+            ),
+            InlineKeyboardButton(
+                text=switch_text("Мои сообщения", own_messages),
+                callback_data=CBT.NOTIF_OWN_MESSAGES
             ),
         ],
         [

@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from support.runtime_config import BotConfig, get_config_manager
+from tg_bot.notifications import NotificationType
 from tg_bot.full_keyboards import (
     get_main_menu,
     get_global_switches_menu,
@@ -101,7 +102,32 @@ def _build_alerts_panel_text() -> str:
     return (
         "🔔 <b>Настройка уведомлений</b>\n\n"
         "Включите только те события, которые должны доходить до Telegram.\n"
-        "Так лента остаётся чистой и действительно полезной."
+        "Здесь же можно выбрать: брать только непрочитанные сообщения или весь поток,"
+        " включая собственные ответы."
+    )
+
+
+def _get_notifications_menu_state() -> dict:
+    return {
+        "messages": BotConfig.NOTIFY_NEW_MESSAGES(),
+        "orders": BotConfig.NOTIFY_NEW_ORDERS(),
+        "restore": BotConfig.NOTIFY_LOT_RESTORE(),
+        "start": BotConfig.NOTIFY_BOT_START(),
+        "stop": BotConfig.NOTIFY_BOT_STOP(),
+        "auto_ticket": BotConfig.NOTIFY_AUTO_TICKET(),
+        "order_confirm": BotConfig.NOTIFY_ORDER_CONFIRMED(),
+        "review": BotConfig.NOTIFY_REVIEW(),
+        "auto_responses": BotConfig.NOTIFY_AUTO_RESPONSES(),
+        "support_messages": BotConfig.NOTIFY_SUPPORT_MESSAGES(),
+        "own_messages": BotConfig.NOTIFY_OWN_MESSAGES(),
+        "all_messages": BotConfig.NOTIFY_ALL_MESSAGES(),
+    }
+
+
+async def _refresh_notifications_menu(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        _build_alerts_panel_text(),
+        reply_markup=get_notifications_menu(**_get_notifications_menu_state()),
     )
 
 
@@ -904,11 +930,34 @@ async def cmd_restart(message: Message, **kwargs):
     
     import os
     import sys
+
+    notifications = kwargs.get("notifications")
+    starvell = kwargs.get("starvell")
     
     await message.answer(
         "🔄 <b>Перезапуск бота...</b>\n\n"
         "⏳ Бот будет перезапущен через несколько секунд"
     )
+
+    if notifications and BotConfig.NOTIFY_BOT_STOP():
+        try:
+            user_info = await starvell.get_user_info() if starvell else {}
+            user = user_info.get("user", {}) if isinstance(user_info, dict) else {}
+            from datetime import datetime
+            current_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            stop_message = (
+                f"<b>Аккаунт:</b> {user.get('username', 'Неизвестно')}\n"
+                f"<b>ID:</b> <code>{user.get('id', 'N/A')}</code>\n\n"
+                f"<b>Время остановки:</b> <code>{current_time}</code>\n"
+                "<b>Причина:</b> ручной перезапуск\n"
+            )
+            await notifications.notify_all_admins(
+                NotificationType.BOT_STOPPED,
+                stop_message,
+                force=False,
+            )
+        except Exception:
+            pass
     
     # Даём время отправить сообщение
     await asyncio.sleep(1)
@@ -1485,29 +1534,8 @@ async def callback_about(callback: CallbackQuery):
 async def callback_notifications(callback: CallbackQuery):
     """Меню настроек уведомлений"""
     await callback.answer()
-    
-    # Загружаем текущий язык
-    
-    
-    # Получаем текущие настройки
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    support_messages = BotConfig.NOTIFY_SUPPORT_MESSAGES()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-    
-    # Формируем описание
-    status_text = _build_alerts_panel_text()
-    
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, support_messages)
-    )
+
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_MESSAGES)
@@ -1520,24 +1548,29 @@ async def callback_notif_messages(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления о сообщениях {status}", show_alert=False)
     
-    # Обновляем меню
-    messages = not current
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    support_messages = BotConfig.NOTIFY_SUPPORT_MESSAGES()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-    
-    status_text = _build_alerts_panel_text()
-    
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, support_messages)
-    )
+    await _refresh_notifications_menu(callback)
+
+
+@router.callback_query(F.data == CBT.NOTIF_ALL_MESSAGES)
+async def callback_notif_all_messages(callback: CallbackQuery):
+    """Переключить режим всех новых сообщений / только непрочитанных."""
+    current = BotConfig.NOTIFY_ALL_MESSAGES()
+    BotConfig.update(**{"notifications.all_messages": not current})
+
+    mode = "все новые сообщения" if not current else "только непрочитанные"
+    await callback.answer(f"Теперь будут приходить: {mode}", show_alert=False)
+    await _refresh_notifications_menu(callback)
+
+
+@router.callback_query(F.data == CBT.NOTIF_OWN_MESSAGES)
+async def callback_notif_own_messages(callback: CallbackQuery):
+    """Переключить уведомления о собственных сообщениях."""
+    current = BotConfig.NOTIFY_OWN_MESSAGES()
+    BotConfig.update(**{"notifications.own_messages": not current})
+
+    status = "включены" if not current else "выключены"
+    await callback.answer(f"Уведомления о своих сообщениях {status}", show_alert=False)
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_ORDERS)
@@ -1550,24 +1583,7 @@ async def callback_notif_orders(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления о заказах {status}", show_alert=False)
     
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = not current
-    support_messages = BotConfig.NOTIFY_SUPPORT_MESSAGES()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-    
-    status_text = _build_alerts_panel_text()
-    
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, support_messages)
-    )
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_SUPPORT_MESSAGES)
@@ -1580,24 +1596,7 @@ async def callback_notif_support_messages(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления от поддержки {status}", show_alert=False)
     
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    support_messages = not current
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-    
-    status_text = _build_alerts_panel_text()
-    
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, support_messages)
-    )
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_RESTORE)
@@ -1610,23 +1609,7 @@ async def callback_notif_restore(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления о восстановлении {status}", show_alert=False)
     
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    restore = not current
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-    
-    status_text = _build_alerts_panel_text()
-    
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, BotConfig.NOTIFY_SUPPORT_MESSAGES())
-    )
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_START)
@@ -1639,23 +1622,7 @@ async def callback_notif_start(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления о запуске {status}", show_alert=False)
     
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = not current
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-    
-    status_text = _build_alerts_panel_text()
-    
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, BotConfig.NOTIFY_SUPPORT_MESSAGES())
-    )
+    await _refresh_notifications_menu(callback)
 
 
 
@@ -1668,23 +1635,7 @@ async def callback_notif_auto_responses(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления автоответов {status}", show_alert=False)
 
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = not current
-
-    status_text = _build_alerts_panel_text()
-
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, BotConfig.NOTIFY_SUPPORT_MESSAGES())
-    )
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_ORDER_CONFIRMED)
@@ -1696,23 +1647,7 @@ async def callback_notif_order_confirmed(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления о подтверждении заказа {status}", show_alert=False)
 
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = not current
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-
-    status_text = _build_alerts_panel_text()
-
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, BotConfig.NOTIFY_SUPPORT_MESSAGES())
-    )
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_AUTO_TICKET)
@@ -1724,23 +1659,7 @@ async def callback_notif_auto_ticket(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления авто-тикета {status}", show_alert=False)
 
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = not current
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-
-    status_text = _build_alerts_panel_text()
-
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, BotConfig.NOTIFY_SUPPORT_MESSAGES())
-    )
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_STOP)
@@ -1752,23 +1671,7 @@ async def callback_notif_stop(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления об остановке бота {status}", show_alert=False)
 
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = not current
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = BotConfig.NOTIFY_REVIEW()
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-
-    status_text = _build_alerts_panel_text()
-
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, BotConfig.NOTIFY_SUPPORT_MESSAGES())
-    )
+    await _refresh_notifications_menu(callback)
 
 
 @router.callback_query(F.data == CBT.NOTIF_REVIEW)
@@ -1780,23 +1683,7 @@ async def callback_notif_review(callback: CallbackQuery):
     status = "включены" if not current else "выключены"
     await callback.answer(f"Уведомления о новых отзывах {status}", show_alert=False)
 
-    # Обновляем меню
-    messages = BotConfig.NOTIFY_NEW_MESSAGES()
-    orders = BotConfig.NOTIFY_NEW_ORDERS()
-    restore = BotConfig.NOTIFY_LOT_RESTORE()
-    start = BotConfig.NOTIFY_BOT_START()
-    stop = BotConfig.NOTIFY_BOT_STOP()
-    auto_ticket = BotConfig.NOTIFY_AUTO_TICKET()
-    order_confirm = BotConfig.NOTIFY_ORDER_CONFIRMED()
-    review = not current
-    auto_responses = BotConfig.NOTIFY_AUTO_RESPONSES()
-
-    status_text = _build_alerts_panel_text()
-
-    await callback.message.edit_text(
-        status_text,
-        reply_markup=get_notifications_menu(messages, orders, restore, start, stop, auto_ticket, order_confirm, review, auto_responses, BotConfig.NOTIFY_SUPPORT_MESSAGES())
-    )
+    await _refresh_notifications_menu(callback)
 
 
 

@@ -75,6 +75,8 @@ class ConfigManager:
         self._config['Notifications'] = {
             'checkInterval': '30',
             'newMessages': 'true',
+            'allMessages': 'false',
+            'includeOwnMessages': 'false',
             'newOrders': 'true',
             'supportMessages': 'true',
             'lotRestore': 'false',
@@ -82,7 +84,10 @@ class ConfigManager:
             'botStop': 'false',
             'lotDeactivate': 'false',
             'lotBump': 'false',
-            'autoTicket': 'true'
+            'autoTicket': 'true',
+            'orderConfirmed': 'false',
+            'review': 'false',
+            'autoResponses': 'false',
         }
         
         self._config['AutoResponse'] = {
@@ -167,6 +172,8 @@ class ConfigManager:
             'Notifications': {
                 'checkInterval': '30',
                 'newMessages': 'true',
+                'allMessages': 'false',
+                'includeOwnMessages': 'false',
                 'newOrders': 'true',
                 'supportMessages': 'true',
                 'lotRestore': 'false',
@@ -174,7 +181,10 @@ class ConfigManager:
                 'botStop': 'false',
                 'lotDeactivate': 'false',
                 'lotBump': 'false',
-                'autoTicket': 'true'
+                'autoTicket': 'true',
+                'orderConfirmed': 'false',
+                'review': 'false',
+                'autoResponses': 'false',
             },
             'AutoResponse': {
                 'orderConfirm': 'false',
@@ -544,6 +554,16 @@ class BotConfig:
     @staticmethod
     def NOTIFY_NEW_MESSAGES() -> bool:
         return _config_manager.get('Notifications', 'newMessages', True)
+
+    @staticmethod
+    def NOTIFY_ALL_MESSAGES() -> bool:
+        """Уведомлять о всех новых сообщениях, а не только о непрочитанных."""
+        return _config_manager.get('Notifications', 'allMessages', False)
+
+    @staticmethod
+    def NOTIFY_OWN_MESSAGES() -> bool:
+        """Уведомлять о сообщениях, отправленных самим продавцом."""
+        return _config_manager.get('Notifications', 'includeOwnMessages', False)
     
     @staticmethod
     def NOTIFY_NEW_ORDERS() -> bool:
@@ -808,6 +828,10 @@ class BotConfig:
                 elif section_key == 'notifications':
                     if cfg_key == 'new_messages':
                         _config_manager.set('Notifications', 'newMessages', value)
+                    elif cfg_key == 'all_messages':
+                        _config_manager.set('Notifications', 'allMessages', value)
+                    elif cfg_key == 'own_messages':
+                        _config_manager.set('Notifications', 'includeOwnMessages', value)
                     elif cfg_key == 'auto_ticket':
                         _config_manager.set('Notifications', 'autoTicket', value)
                     elif cfg_key == 'new_orders':

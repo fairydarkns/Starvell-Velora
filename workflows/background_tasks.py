@@ -181,14 +181,14 @@ class BackgroundTasks:
                             author_username = participant.get("username") or participant.get("name")
                             break
                 
-                # Пропускаем свои сообщения (проверяем по ID из кэша или из author)
+                # Пропускаем свои сообщения, если они не включены в настройках.
                 try:
                     # Используем кэшированный user_id если он есть
                     if not hasattr(self, '_my_user_id'):
                         user_info = await self.starvell.get_user_info()
                         self._my_user_id = str(user_info.get("user", {}).get("id", ""))
                     
-                    if str(author_id) == self._my_user_id:
+                    if str(author_id) == self._my_user_id and not BotConfig.NOTIFY_OWN_MESSAGES():
                         continue
                 except Exception:
                     pass

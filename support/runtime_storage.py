@@ -177,38 +177,6 @@ class StatisticsStorage(JSONStorage):
     def __init__(self, storage_dir: str = "storage/stats"):
         super().__init__(f"{storage_dir}/statistics.json")
         
-    async def add_sent_message(self, chat_id: str, content: str):
-        """Добавить отправленное сообщение"""
-        data = await self._read()
-        
-        if "sent_messages" not in data:
-            data["sent_messages"] = []
-            
-        data["sent_messages"].append({
-            "chat_id": chat_id,
-            "content": content[:100],  # Храним только первые 100 символов
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Ограничиваем размер (храним последние 1000)
-        if len(data["sent_messages"]) > 1000:
-            data["sent_messages"] = data["sent_messages"][-1000:]
-            
-        await self._write(data)
-        
-    async def get_sent_messages_count(self, since: Optional[datetime] = None) -> int:
-        """Получить количество отправленных сообщений"""
-        data = await self._read()
-        messages = data.get("sent_messages", [])
-        
-        if since:
-            messages = [
-                m for m in messages
-                if datetime.fromisoformat(m["timestamp"]) >= since
-            ]
-            
-        return len(messages)
-        
     async def add_bump_history(self, game_id: int, categories: List[int], success: bool):
         """Добавить запись о bump'е"""
         data = await self._read()
@@ -264,7 +232,6 @@ class StatisticsStorage(JSONStorage):
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         
         return {
-            "messages_sent": await self.get_sent_messages_count(since=today),
             "bumps_done": await self.get_bump_count(since=today),
         }
 
@@ -309,12 +276,6 @@ class Database:
 
     async def set_last_order_message(self, chat_id: str, message_id: str):
         await self.cache.set_last_order_message(chat_id, message_id)
-        
-    async def add_sent_message(self, chat_id: str, content: str):
-        await self.stats.add_sent_message(chat_id, content)
-        
-    async def get_sent_messages_count(self, since: Optional[datetime] = None) -> int:
-        return await self.stats.get_sent_messages_count(since)
         
     async def add_bump_history(self, game_id: int, categories: List[int], success: bool):
         await self.stats.add_bump_history(game_id, categories, success)

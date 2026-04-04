@@ -36,6 +36,28 @@ CONFIG_LAYOUT: OrderedDict[str, OrderedDict[str, str]] = OrderedDict(
             ),
         ),
         (
+            "Notifications",
+            OrderedDict(
+                [
+                    ("checkinterval", "30"),
+                    ("newmessages", "true"),
+                    ("allmessages", "false"),
+                    ("includeownmessages", "false"),
+                    ("neworders", "true"),
+                    ("supportmessages", "true"),
+                    ("lotrestore", "false"),
+                    ("botstart", "false"),
+                    ("botstop", "false"),
+                    ("lotdeactivate", "false"),
+                    ("lotbump", "false"),
+                    ("autoticket", "true"),
+                    ("orderconfirmed", "false"),
+                    ("review", "false"),
+                    ("autoresponses", "false"),
+                ]
+            ),
+        ),
+        (
             "Starvell",
             OrderedDict(
                 [
@@ -45,7 +67,43 @@ CONFIG_LAYOUT: OrderedDict[str, OrderedDict[str, str]] = OrderedDict(
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                         "(KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
                     ),
+                    ("autoraise", "false"),
+                    ("autodelivery", "false"),
+                    ("autorestore", "false"),
+                    ("autoticket", "false"),
+                    ("autoticketinterval", "3600"),
+                    ("autoticketmaxorders", "5"),
+                    ("autoticketorderage", "48"),
+                    ("autoread", "true"),
                     ("locale", "ru"),
+                ]
+            ),
+        ),
+        (
+            "AutoResponse",
+            OrderedDict(
+                [
+                    ("orderconfirm", "false"),
+                    ("orderconfirmtext", "Спасибо за покупку! Если возникнут вопросы - обращайтесь."),
+                    ("reviewresponse", "false"),
+                    ("reviewresponsetext", "Благодарю за отзыв! Рад был помочь."),
+                ]
+            ),
+        ),
+        (
+            "AutoRaise",
+            OrderedDict(
+                [
+                    ("enabled", "false"),
+                    ("interval", "3600"),
+                ]
+            ),
+        ),
+        (
+            "Storage",
+            OrderedDict(
+                [
+                    ("dir", "storage"),
                 ]
             ),
         ),
@@ -53,11 +111,9 @@ CONFIG_LAYOUT: OrderedDict[str, OrderedDict[str, str]] = OrderedDict(
             "Monitor",
             OrderedDict(
                 [
-                    ("chat_poll_interval", "5"),
-                    ("order_poll_interval", "10"),
-                    ("request_timeout", "20"),
-                    ("retry_count", "3"),
-                    ("auto_read", "true"),
+                    ("chatpollinterval", "5"),
+                    ("orderspollinterval", "10"),
+                    ("remoteinfointerval", "120"),
                 ]
             ),
         ),
@@ -87,13 +143,31 @@ CONFIG_LAYOUT: OrderedDict[str, OrderedDict[str, str]] = OrderedDict(
             ),
         ),
         (
+            "KeepAlive",
+            OrderedDict(
+                [
+                    ("enabled", "true"),
+                ]
+            ),
+        ),
+        (
+            "AutoTicket",
+            OrderedDict(
+                [
+                    ("tickettype", "1"),
+                    ("orderusertypeid", "2"),
+                    ("ordertopicid", "501"),
+                ]
+            ),
+        ),
+        (
             "Other",
             OrderedDict(
                 [
                     ("debug", "false"),
                     ("log_level", "INFO"),
                     ("timezone", "Europe/Moscow"),
-                    ("use_watermark", "false"),
+                    ("usewatermark", "false"),
                     ("watermark", ""),
                 ]
             ),
