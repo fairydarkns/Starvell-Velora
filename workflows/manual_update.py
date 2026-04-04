@@ -10,7 +10,7 @@ from urllib.request import urlopen
 from support.backup import create_user_backup
 from support.process_control import restart_current_process
 from support.updater import apply_update_from_archive
-from version import GITHUB_REPO, UPDATE_BRANCH_FALLBACKS, VERSION
+from version import GITHUB_REPO, UPDATE_ARCHIVE_URL, UPDATE_BRANCH, VERSION, VERSION_URL
 
 
 logger = logging.getLogger("ManualUpdate")
@@ -42,31 +42,17 @@ class ManualUpdateService:
             raise RuntimeError(f"Не удалось проверить обновления: {error}") from error
 
     def _download_version_file(self) -> str:
-        last_error: Exception | None = None
-        for branch in UPDATE_BRANCH_FALLBACKS:
-            version_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{branch}/version.py"
-            archive_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/{branch}.zip"
-            try:
-                with urlopen(version_url, timeout=10) as response:  # noqa: S310
-                    self._resolved_branch = branch
-                    self._resolved_version_url = version_url
-                    self._resolved_archive_url = archive_url
-                    return response.read().decode("utf-8")
-            except HTTPError as error:
-                last_error = error
-                if error.code == 404:
-                    continue
-                raise
-            except Exception as error:  # noqa: BLE001
-                last_error = error
-                raise
-
-        if last_error is None:
-            raise RuntimeError("Не удалось получить version.py ни из одной ветки")
-        raise RuntimeError(
-            "Не удалось получить version.py из GitHub. "
-            f"Проверьте репозиторий {GITHUB_REPO} и доступные ветки {', '.join(UPDATE_BRANCH_FALLBACKS)}"
-        ) from last_error
+        try:
+            with urlopen(VERSION_URL, timeout=10) as response:  # noqa: S310
+                self._resolved_branch = UPDATE_BRANCH
+                self._resolved_version_url = VERSION_URL
+                self._resolved_archive_url = UPDATE_ARCHIVE_URL
+                return response.read().decode("utf-8")
+        except HTTPError as error:
+            raise RuntimeError(
+                "Не удалось получить version.py из GitHub. "
+                f"Проверьте репозиторий {GITHUB_REPO} и ветку {UPDATE_BRANCH}"
+            ) from error
 
     @staticmethod
     def _compare_versions(current: str, latest: str) -> bool:
