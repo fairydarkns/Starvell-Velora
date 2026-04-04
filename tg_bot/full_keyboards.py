@@ -159,7 +159,7 @@ def get_main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text="🛠️ Дополнительные настройки",
+                text="🧰 Дополнительные настройки",
                 callback_data=CBT.MAIN_PAGE_2
             ),
         ],
@@ -180,6 +180,12 @@ def get_main_menu_page_2() -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 text="⭐ Ответ на отзыв",
                 callback_data=CBT.REVIEW_RESPONSE
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="🎫 Настройка авто-тикета",
+                callback_data=CBT.AUTO_TICKET_SETTINGS
             ),
         ],
         [
@@ -1013,7 +1019,7 @@ def get_auto_ticket_settings_menu(
         [
             InlineKeyboardButton(
                 text="🔙 Назад",
-                callback_data=CBT.GLOBAL_SWITCHES
+                callback_data=CBT.MAIN_PAGE_2
             )
         ]
     ]
