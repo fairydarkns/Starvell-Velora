@@ -12,6 +12,7 @@ from types import ModuleType
 from typing import Callable, Dict, Optional
 from uuid import UUID
 
+from aiogram.filters.state import StateFilter
 
 logger = logging.getLogger("ExtensionHub")
 
@@ -288,7 +289,7 @@ class ExtensionHub:
                     handler = handler_data.get("handler")
                     text_filter = handler_data.get("filter")
                     if handler and text_filter:
-                        router.message.register(handler, text_filter)
+                        router.message.register(handler, StateFilter(None), text_filter)
                 logger.info(
                     "Зарегистрированы текстовые обработчики модуля %s: %s",
                     extension.name,
