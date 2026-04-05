@@ -934,14 +934,6 @@ def get_module_info_menu(uuid: str, offset: int, enabled: bool, has_commands: bo
         ],
     ]
 
-    if has_commands:
-        keyboard.append([
-            InlineKeyboardButton(
-                text="⌨️ Команды модуля",
-                callback_data=f"plugin_commands:{uuid}:{offset}"
-            )
-        ])
-
     keyboard.extend([
         [
             InlineKeyboardButton(

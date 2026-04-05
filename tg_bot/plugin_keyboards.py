@@ -89,14 +89,6 @@ def edit_module(module_card, CBT, uuid: str, offset: int, ask_delete: bool = Fal
             )
         ])
 
-        if module_card.commands:
-            keyboard.append([
-                InlineKeyboardButton(
-                    text="⌨️ Команды модуля",
-                    callback_data=f"{CBT.PLUGIN_COMMANDS}:{uuid}:{offset}"
-                )
-            ])
-        
         keyboard.append([
             InlineKeyboardButton(
                 text="🗑 Удалить модуль",
