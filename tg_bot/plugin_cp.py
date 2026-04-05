@@ -20,6 +20,23 @@ from tg_bot.plugin_keyboards import modules_list, edit_module, module_commands
 logger = logging.getLogger("ModulesCP")
 
 
+def _build_module_card_text(module_card) -> str:
+    text = (
+        f"<b><i>{module_card.name} v{module_card.version}</i></b>\n\n"
+        f"{module_card.description}\n\n"
+        f"<b><i>UUID:</i></b> <code>{module_card.uuid}</code>\n"
+        f"<b><i>Автор:</i></b> {module_card.author}\n"
+        f"<b><i>Статус:</i></b> {'🔹 Активен' if module_card.enabled else '▫️ На паузе'}\n"
+    )
+
+    if module_card.commands:
+        text += "\n<b><i>Команды модуля:</i></b>\n"
+        for cmd, desc in module_card.commands.items():
+            text += f"• <code>/{cmd}</code> — {desc or 'Без описания'}\n"
+
+    return text
+
+
 class ModuleUploadState(StatesGroup):
     """Состояния для загрузки модулей"""
     waiting_for_file = State()
@@ -98,16 +115,8 @@ def init_modules_cp(bot, extension_hub: "ExtensionHub", router, *args):
         
         keyboard = edit_module(module_card, CBT, uuid, int(offset), ask_delete=False)
         
-        text = (
-            f"<b><i>{module_card.name} v{module_card.version}</i></b>\n\n"
-            f"{module_card.description}\n\n"
-            f"<b><i>UUID:</i></b> <code>{module_card.uuid}</code>\n"
-            f"<b><i>Автор:</i></b> {module_card.author}\n"
-            f"<b><i>Статус:</i></b> {'🔹 Активен' if module_card.enabled else '▫️ На паузе'}\n"
-        )
-        
         await callback.message.edit_text(
-            text=text,
+            text=_build_module_card_text(module_card),
             reply_markup=keyboard,
             parse_mode="HTML"
         )

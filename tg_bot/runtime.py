@@ -75,6 +75,43 @@ def _log_profile_summary(user: dict) -> None:
     )
 
 
+def _build_bot_commands(extension_hub: ExtensionHub | None = None) -> list[BotCommand]:
+    commands = [
+        BotCommand(command="menu", description="🧭 Хаб управления"),
+        BotCommand(command="profile", description="🪪 Паспорт продавца"),
+        BotCommand(command="order_test", description="🧾 Последний заказ"),
+        BotCommand(command="update", description="📦 Ручное обновление"),
+        BotCommand(command="logs", description="🗒 Журнал узла"),
+        BotCommand(command="restart", description="♻️ Перезапуск узла"),
+        BotCommand(command="session_cookie", description="🪪 Обновить сессию"),
+        BotCommand(command="lot_test", description="🧪 Проверка лота"),
+    ]
+
+    if extension_hub is None:
+        return commands
+
+    seen = {item.command for item in commands}
+    for card in extension_hub.plugins.values():
+        if not card.enabled:
+            continue
+        for command_name, description in card.commands.items():
+            if command_name in seen:
+                continue
+            commands.append(
+                BotCommand(
+                    command=command_name,
+                    description=(description or f"Команда модуля {card.name}")[:256],
+                )
+            )
+            seen.add(command_name)
+
+    return commands
+
+
+def _format_commands_for_log(commands: list[BotCommand]) -> str:
+    return ", ".join(f"/{item.command}" for item in commands)
+
+
 async def _notify_bot_stopped(notifications, user: dict) -> None:
     if not BotConfig.NOTIFY_BOT_STOP():
         return
@@ -118,19 +155,10 @@ async def main():
     )
     dp = Dispatcher()
     
-    # Устанавливаем меню команд
-    commands = [
-        BotCommand(command="menu", description="🧭 Хаб управления"),
-        BotCommand(command="profile", description="🪪 Паспорт продавца"),
-        BotCommand(command="order_test", description="🧾 Последний заказ"),
-        BotCommand(command="update", description="📦 Ручное обновление"),
-        BotCommand(command="logs", description="🗒 Журнал узла"),
-        BotCommand(command="restart", description="♻️ Перезапуск узла"),
-        BotCommand(command="session_cookie", description="🪪 Обновить сессию"),
-        BotCommand(command="lot_test", description="🧪 Проверка лота"),
-    ]
-    await bot.set_my_commands(commands)
-    logger.info("Меню команд установлено")
+    # Устанавливаем базовое меню команд.
+    base_commands = _build_bot_commands()
+    await bot.set_my_commands(base_commands)
+    logger.info("Меню команд установлено: %s", _format_commands_for_log(base_commands))
     
     try:
         await bot.set_my_short_description(
@@ -198,6 +226,9 @@ async def main():
     # Регистрируем обработчики расширений
     extension_hub.attach_router(router)
     logger.info("Обработчики расширений зарегистрированы")
+    synced_commands = _build_bot_commands(extension_hub)
+    await bot.set_my_commands(synced_commands)
+    logger.info("Меню команд модулей синхронизировано: %s", _format_commands_for_log(synced_commands))
     
     try:
         await starvell.start()

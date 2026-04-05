@@ -216,9 +216,12 @@ class ExtensionHub:
         logger.info(f"Подключено модулей: {loaded_count}/{len(extension_files)}")
 
     def attach_router(self, router=None) -> None:
+        active_extensions: list[ExtensionCard] = []
+
         for uuid, extension in self.extensions.items():
             if not extension.enabled:
                 continue
+            active_extensions.append(extension)
 
             module = extension.module
             if hasattr(module, "BIND_TO_INIT"):
@@ -244,27 +247,53 @@ class ExtensionHub:
             if hasattr(module, "BIND_TO_SETTINGS_PAGE"):
                 self.settings_handlers[uuid] = module.BIND_TO_SETTINGS_PAGE
 
-            if router and hasattr(module, "COMMANDS"):
+        if not router:
+            return
+
+        # Сначала регистрируем все команды модулей, чтобы их не перехватывали
+        # более общие текстовые обработчики F.text из других модулей.
+        for extension in active_extensions:
+            module = extension.module
+            if hasattr(module, "COMMANDS"):
                 for command_name, command_data in module.COMMANDS.items():
                     handler = command_data.get("handler")
                     filters_list = command_data.get("filters", [])
                     if handler:
                         router.message.register(handler, *filters_list)
                         extension.commands[command_name] = command_data.get("description", "")
+                        logger.info(
+                            "Зарегистрирована команда модуля %s: /%s",
+                            extension.name,
+                            command_name,
+                        )
 
-            if router and hasattr(module, "CALLBACKS"):
+        for extension in active_extensions:
+            module = extension.module
+            if hasattr(module, "CALLBACKS"):
                 for _, callback_data in module.CALLBACKS.items():
                     handler = callback_data.get("handler")
                     callback_filter = callback_data.get("filter")
                     if handler and callback_filter:
                         router.callback_query.register(handler, callback_filter)
+                logger.info(
+                    "Зарегистрированы callback-обработчики модуля %s: %s",
+                    extension.name,
+                    len(getattr(module, "CALLBACKS", {})),
+                )
 
-            if router and hasattr(module, "TEXT_HANDLERS"):
+        for extension in active_extensions:
+            module = extension.module
+            if hasattr(module, "TEXT_HANDLERS"):
                 for _, handler_data in module.TEXT_HANDLERS.items():
                     handler = handler_data.get("handler")
                     text_filter = handler_data.get("filter")
                     if handler and text_filter:
                         router.message.register(handler, text_filter)
+                logger.info(
+                    "Зарегистрированы текстовые обработчики модуля %s: %s",
+                    extension.name,
+                    len(getattr(module, "TEXT_HANDLERS", {})),
+                )
 
     async def execute_handlers(self, handlers: list[Callable], *args) -> None:
         for handler in handlers:

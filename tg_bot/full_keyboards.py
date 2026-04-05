@@ -161,7 +161,7 @@ def get_main_menu() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(
-                text="🧰 Дополнительные настройки",
+                text="🛠️ Дополнительные настройки",
                 callback_data=CBT.MAIN_PAGE_2
             ),
         ],
@@ -914,7 +914,7 @@ def get_select_template_menu(chat_id: str, templates: list = None) -> InlineKeyb
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_module_info_menu(uuid: str, offset: int, enabled: bool) -> InlineKeyboardMarkup:
+def get_module_info_menu(uuid: str, offset: int, enabled: bool, has_commands: bool = False) -> InlineKeyboardMarkup:
     """
     Генерирует меню информации о модуле
     
@@ -932,6 +932,17 @@ def get_module_info_menu(uuid: str, offset: int, enabled: bool) -> InlineKeyboar
                 callback_data=f"plugin_toggle:{uuid}:{offset}"
             )
         ],
+    ]
+
+    if has_commands:
+        keyboard.append([
+            InlineKeyboardButton(
+                text="⌨️ Команды модуля",
+                callback_data=f"plugin_commands:{uuid}:{offset}"
+            )
+        ])
+
+    keyboard.extend([
         [
             InlineKeyboardButton(
                 text="🗑 Удалить модуль",
@@ -944,7 +955,7 @@ def get_module_info_menu(uuid: str, offset: int, enabled: bool) -> InlineKeyboar
                 callback_data=f"plugins_list:{offset}"
             )
         ]
-    ]
+    ])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 

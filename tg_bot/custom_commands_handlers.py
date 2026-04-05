@@ -30,26 +30,24 @@ class CustomCommandState(StatesGroup):
 
 def load_commands():
     """Загрузить кастомные команды из JSON"""
-    if not COMMANDS_FILE.exists() and LEGACY_COMMANDS_FILE.exists():
-        try:
-            COMMANDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            LEGACY_COMMANDS_FILE.replace(COMMANDS_FILE)
-            logger.info("Файл кастомных команд перенесён в storage/telegram/")
-        except Exception as e:
-            logger.error(f"Ошибка переноса кастомных команд: {e}")
-
-    if not COMMANDS_FILE.exists():
-        # Создать файл по умолчанию
-        COMMANDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        default_data = {
-            "prefix": "!",
-            "enabled": False,
-            "commands": []
-        }
-        save_commands(default_data)
-        return default_data
-    
     try:
+        if not COMMANDS_FILE.exists() and LEGACY_COMMANDS_FILE.exists():
+            try:
+                COMMANDS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                LEGACY_COMMANDS_FILE.replace(COMMANDS_FILE)
+                logger.info("Файл кастомных команд перенесён в storage/telegram/")
+            except Exception as e:
+                logger.error(f"Ошибка переноса кастомных команд: {e}")
+
+        if not COMMANDS_FILE.exists():
+            default_data = {
+                "prefix": "!",
+                "enabled": False,
+                "commands": []
+            }
+            save_commands(default_data)
+            return default_data
+
         with open(COMMANDS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:

@@ -89,7 +89,7 @@ class ConfigManager:
             'review': 'false',
             'autoResponses': 'false',
         }
-        
+
         self._config['AutoResponse'] = {
             'orderConfirm': 'false',
             'orderConfirmText': 'Спасибо за покупку! Если возникнут вопросы - обращайтесь.',
