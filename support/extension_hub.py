@@ -282,19 +282,28 @@ class ExtensionHub:
                     len(getattr(module, "CALLBACKS", {})),
                 )
 
+        text_handlers_registered = False
         for extension in active_extensions:
-            module = extension.module
-            if hasattr(module, "TEXT_HANDLERS"):
-                for _, handler_data in module.TEXT_HANDLERS.items():
-                    handler = handler_data.get("handler")
-                    text_filter = handler_data.get("filter")
-                    if handler and text_filter:
-                        router.message.register(handler, StateFilter(None), text_filter)
-                logger.info(
-                    "Зарегистрированы текстовые обработчики модуля %s: %s",
-                    extension.name,
-                    len(getattr(module, "TEXT_HANDLERS", {})),
-                )
+            logger.info(
+                "Зарегистрированы текстовые обработчики модуля %s: %s",
+                extension.name,
+                len(getattr(extension.module, "TEXT_HANDLERS", {})),
+            )
+            if getattr(extension.module, "TEXT_HANDLERS", {}):
+                text_handlers_registered = True
+
+        if text_handlers_registered:
+            async def _dispatch_extension_text_handlers(message):
+                for extension in active_extensions:
+                    module = extension.module
+                    if not hasattr(module, "TEXT_HANDLERS"):
+                        continue
+                    for _, handler_data in module.TEXT_HANDLERS.items():
+                        handler = handler_data.get("handler")
+                        if handler:
+                            await handler(message)
+
+            router.message.register(_dispatch_extension_text_handlers, StateFilter(None))
 
     async def execute_handlers(self, handlers: list[Callable], *args) -> None:
         for handler in handlers:
