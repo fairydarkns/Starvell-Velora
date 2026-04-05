@@ -538,46 +538,37 @@ class StarAPI:
         Returns:
             list: Список офферов пользователя
         """
-        logger.debug(f"🔍 Запрашиваю страницу пользователя {user_id}...")
-        
-        html = await self.session.get_text(
-            f"{self.config.BASE_URL}/users/{user_id}",
-            headers={
-                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "cache-control": "max-age=0",
-                "upgrade-insecure-requests": "1",
-            },
+        logger.debug("🔍 Запрашиваю список лотов пользователя %s через Next Data...", user_id)
+
+        data = await self._get_next_data(
+            f"users/{user_id}.json",
+            params=f"?user_id={user_id}",
         )
-        
-        logger.debug(f"📄 Получена HTML-страница, размер: {len(html)} байт")
-        
-        # Парсим __NEXT_DATA__
-        import re
-        import json
-        
-        marker = '<script id="__NEXT_DATA__" type="application/json">'
-        idx = html.find(marker)
-        if idx == -1:
-            logger.warning("⚠️ Не найден маркер __NEXT_DATA__ на странице")
+
+        page_props = data.get("pageProps", {})
+        bff = page_props.get("bff") or {}
+
+        categories = None
+        source_key = "unknown"
+        for key, source in (
+            ("pageProps.bff.userProfileOffers", bff.get("userProfileOffers")),
+            ("pageProps.userProfileOffers", page_props.get("userProfileOffers")),
+            ("pageProps.categoriesWithOffers", page_props.get("categoriesWithOffers")),
+        ):
+            if isinstance(source, list):
+                categories = source
+                source_key = key
+                break
+
+        if not isinstance(categories, list):
+            logger.warning("⚠️ Не удалось найти userProfileOffers в Next Data для пользователя %s", user_id)
+            logger.debug("📊 Ключи pageProps: %s", list(page_props.keys()))
+            if isinstance(bff, dict):
+                logger.debug("📊 Ключи pageProps.bff: %s", list(bff.keys()))
             return []
-            
-        json_start = html.find('{', idx)
-        if json_start == -1:
-            logger.warning("⚠️ Не найдено начало JSON в __NEXT_DATA__")
-            return []
-            
-        json_end = html.find('</script>', json_start)
-        if json_end == -1:
-            logger.warning("⚠️ Не найден конец JSON в __NEXT_DATA__")
-            return []
-            
-        data = json.loads(html[json_start:json_end])
-        logger.debug("✅ JSON успешно распарсен")
-        
-        page_props = data.get("props", {}).get("pageProps", {})
-        categories = page_props.get("categoriesWithOffers", [])
-        
-        logger.debug(f"📊 Найдено категорий: {len(categories)}")
+
+        logger.debug("📊 Источник офферов: %s", source_key)
+        logger.debug("📊 Найдено категорий: %s", len(categories))
         
         offers = []
         for category in categories:
@@ -590,7 +581,12 @@ class StarAPI:
                 availability = offer.get("availability")
                 
                 # Формируем название
-                brief = (offer.get("descriptions") or {}).get("rus", {}).get("briefDescription")
+                descriptions = offer.get("descriptions") or {}
+                brief = (descriptions.get("rus") or {}).get("briefDescription")
+                if not brief:
+                    brief = offer.get("title") or offer.get("name")
+                if not brief:
+                    brief = category.get("name")
                 attrs = offer.get("attributes", [])
                 labels = [a.get("valueLabel") for a in attrs if a.get("valueLabel")]
                 title_parts = [p for p in [brief, *labels] if p]
