@@ -202,26 +202,11 @@ class BackgroundTasks:
         order_id = str(payload.get("orderId") or "")
         if not order_id:
             return
-        try:
-            details = await self.starvell.get_order_details(order_id)
-            page_props = details.get("pageProps", {})
-            order = dict(page_props.get("order") or {})
-            if not order:
-                logger.warning("Socket sale_update: не удалось извлечь заказ %s", order_id)
-                return
-            order["id"] = order_id
-            chat = page_props.get("chat") or {}
-            if chat.get("id"):
-                order["chat_id"] = str(chat.get("id"))
-                order["chatId"] = str(chat.get("id"))
-            buyer = order.get("buyer") or page_props.get("buyer") or order.get("user") or {}
-            if isinstance(buyer, dict):
-                order["buyer"] = buyer
-                order["user"] = buyer
-                order["buyerId"] = order.get("buyerId") or buyer.get("id")
-            await self._process_order(order)
-        except Exception as exc:
-            logger.error(f"Ошибка обработки sale_update для заказа {order_id}: {exc}", exc_info=True)
+        logger.debug(
+            "Получен sale_update для заказа %s (delta=%s). Новый заказ определяем только по ORDER_PAYMENT в /chats.",
+            order_id,
+            payload.get("delta"),
+        )
         
     async def _check_new_messages_loop(self):
         """Polling цикл для проверки новых сообщений"""
@@ -367,6 +352,15 @@ class BackgroundTasks:
 
         await self._ensure_current_user()
         status = order.get("status", "CREATED")
+        normalized_status = str(status).upper()
+
+        if normalized_status not in {"CREATED", "PRE_CREATED"}:
+            logger.debug(
+                "Пропускаю socket/order событие для заказа %s со статусом %s: это не новый заказ",
+                order_id,
+                normalized_status,
+            )
+            return
 
         buyer_obj = order.get("buyer") or order.get("user") or {}
         buyer_id = str(order.get("buyerId") or buyer_obj.get("id") or "")
@@ -445,7 +439,7 @@ class BackgroundTasks:
             status=status,
             order_data=order,
         )
-        await self.db.set_last_order(order_id, status)
+        await self.db.set_last_order(order_id, normalized_status)
 
         logger.info(f"🛒 Новый заказ #{short_id} от {buyer_name}: {lot_name} - {amount}₽")
         logger.debug(f"Полные данные заказа: {order}")
