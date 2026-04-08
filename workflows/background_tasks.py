@@ -168,24 +168,17 @@ class BackgroundTasks:
         if not chat_id:
             return
 
+        message_id = str(message.get("id") or "")
+
         if message.get("type") == "NOTIFICATION":
-            metadata = message.get("metadata") or {}
-            if metadata.get("notificationType") == "ORDER_PAYMENT":
-                order = dict(message.get("order") or {})
-                order_id = str(metadata.get("orderId") or order.get("id") or "")
-                if not order_id:
-                    if BotConfig.AUTO_READ_ENABLED():
-                        await self.starvell.mark_chat_as_read(chat_id)
-                    return
-                order["id"] = order_id
-                order["buyerId"] = message.get("buyerId") or (message.get("buyer") or {}).get("id")
-                order["buyer"] = message.get("buyer") or order.get("buyer") or {}
-                order["user"] = order.get("buyer") or order.get("user") or {}
-                order["chat_id"] = chat_id
-                order["chatId"] = chat_id
-                order["_notification_type"] = metadata.get("notificationType")
-                order["_message_id"] = message.get("id")
-                await self._process_order(order)
+            if chat_id not in self._seen_messages:
+                self._seen_messages[chat_id] = set()
+            if message_id and message_id in self._seen_messages[chat_id]:
+                return
+            if message_id:
+                self._seen_messages[chat_id].add(message_id)
+
+            await self._handle_socket_notification(message)
             if BotConfig.AUTO_READ_ENABLED():
                 await self.starvell.mark_chat_as_read(chat_id)
             return
@@ -198,15 +191,143 @@ class BackgroundTasks:
             }
         )
 
-    async def _handle_socket_sale_update(self, payload: dict):
-        order_id = str(payload.get("orderId") or "")
+    @staticmethod
+    def _build_short_order_id(order_id: str, order: dict | None = None) -> str:
+        if order and order.get("shortId"):
+            return str(order["shortId"])
+        clean_id = order_id.replace("-", "")
+        return clean_id[-8:].upper() if len(clean_id) >= 8 else order_id[:8].upper()
+
+    @staticmethod
+    def _resolve_buyer_name(order: dict, message: dict) -> str:
+        buyer = message.get("buyer") or order.get("buyer") or order.get("user") or {}
+        buyer_id = message.get("buyerId") or order.get("buyerId") or buyer.get("id")
+        if isinstance(buyer, dict):
+            return (
+                buyer.get("username")
+                or buyer.get("nickname")
+                or buyer.get("name")
+                or buyer.get("displayName")
+                or f"ID{buyer_id}"
+                or "Неизвестно"
+            )
+        if buyer_id:
+            return f"ID{buyer_id}"
+        return "Неизвестно"
+
+    async def _handle_socket_notification(self, message: dict):
+        metadata = message.get("metadata") or {}
+        notification_type = str(metadata.get("notificationType") or "").upper()
+        order = dict(message.get("order") or {})
+        order_id = str(metadata.get("orderId") or order.get("id") or "")
+        chat_id = str(message.get("chatId") or "")
+
         if not order_id:
             return
-        logger.debug(
-            "Получен sale_update для заказа %s (delta=%s). Новый заказ определяем только по ORDER_PAYMENT в /chats.",
-            order_id,
-            payload.get("delta"),
-        )
+
+        order["id"] = order_id
+        order["buyerId"] = message.get("buyerId") or (message.get("buyer") or {}).get("id") or order.get("buyerId")
+        order["buyer"] = message.get("buyer") or order.get("buyer") or {}
+        order["user"] = order.get("buyer") or order.get("user") or {}
+        order["chat_id"] = chat_id
+        order["chatId"] = chat_id
+        order["_notification_type"] = notification_type
+        order["_message_id"] = message.get("id")
+
+        if notification_type == "ORDER_PAYMENT":
+            await self._process_order(order)
+            return
+
+        if not self.notifier:
+            return
+
+        await self._ensure_current_user()
+
+        order_status = str(order.get("status") or "").upper()
+        short_id = self._build_short_order_id(order_id, order)
+        buyer_name = self._resolve_buyer_name(order, message)
+        seller_name = self._my_username or "Неизвестно"
+        review = order.get("review") or {}
+
+        refund_types = {"ORDER_REFUNDED", "ORDER_CANCELLED", "ORDER_CANCELED"}
+        refund_statuses = {"REFUNDED", "CANCELLED", "CANCELED"}
+        buyer_confirm_types = {
+            "ORDER_CONFIRMED",
+            "ORDER_COMPLETED",
+            "ORDER_COMPLETED_BY_BUYER",
+            "BUYER_CONFIRMED",
+            "BUYER_COMPLETED",
+        }
+        seller_confirm_types = {
+            "ORDER_MARKED_COMPLETED",
+            "ORDER_COMPLETED_BY_SELLER",
+            "SELLER_CONFIRMED",
+            "SELLER_COMPLETED",
+        }
+        seller_confirm_statuses = {"WAITING_CONFIRMATION", "PENDING_CONFIRMATION"}
+
+        if review or "REVIEW" in notification_type:
+            if not review and order_id:
+                try:
+                    order_details = await self.starvell.get_order_details(order_id)
+                    page_props = order_details.get("pageProps", {})
+                    detailed_order = page_props.get("order") or page_props.get("bff", {}).get("order") or {}
+                    review = detailed_order.get("review") or {}
+                except Exception as e:
+                    logger.debug("Не удалось получить детали отзыва по заказу %s: %s", order_id, e)
+            await self.notifier.notify_order_review(
+                order_id=order_id,
+                short_id=short_id,
+                buyer=buyer_name,
+                rating=str(review.get("rating", "N/A")),
+                comment=str(review.get("content") or review.get("comment") or review.get("text") or ""),
+                review_id=str(review.get("id") or ""),
+                can_reply=not bool(review.get("reviewResponse")),
+            )
+            return
+
+        if (
+            notification_type in refund_types
+            or "REFUND" in notification_type
+            or "CANCEL" in notification_type
+            or order.get("refundedAt")
+            or order_status in refund_statuses
+        ):
+            await self.notifier.notify_order_refunded(
+                order_id=order_id,
+                short_id=short_id,
+                buyer=buyer_name,
+                seller=seller_name,
+            )
+            return
+
+        if (
+            notification_type in seller_confirm_types
+            or ("SELLER" in notification_type and ("CONFIRM" in notification_type or "COMPLETE" in notification_type))
+            or order_status in seller_confirm_statuses
+        ):
+            await self.notifier.notify_order_marked_completed(
+                order_id=order_id,
+                short_id=short_id,
+                buyer=buyer_name,
+                seller=seller_name,
+            )
+            return
+
+        if (
+            notification_type in buyer_confirm_types
+            or ("BUYER" in notification_type and ("CONFIRM" in notification_type or "COMPLETE" in notification_type))
+            or order_status == "COMPLETED"
+        ):
+            await self.notifier.notify_order_buyer_confirmed(
+                order_id=order_id,
+                short_id=short_id,
+                buyer=buyer_name,
+            )
+            return
+
+    async def _handle_socket_sale_update(self, payload: dict):
+        return
         
     async def _check_new_messages_loop(self):
         """Polling цикл для проверки новых сообщений"""

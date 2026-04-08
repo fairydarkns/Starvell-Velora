@@ -408,6 +408,25 @@ class StarAPI:
             referer=f"{self.config.BASE_URL}/order/{order_id}",
             include_sid=True,
         )
+
+    async def create_review_response(self, review_id: str, content: str, order_id: str) -> Dict[str, Any]:
+        """
+        Ответить на отзыв.
+
+        Args:
+            review_id: ID отзыва
+            content: Текст ответа
+            order_id: ID заказа для referer
+
+        Returns:
+            dict: Результат операции
+        """
+        return await self.session.post_json(
+            f"{self.config.API_URL}/review-responses/create",
+            data={"content": content, "reviewId": review_id},
+            referer=f"{self.config.BASE_URL}/order/{order_id}",
+            include_sid=True,
+        )
     
     async def get_order_details(self, order_id: str) -> Dict[str, Any]:
         """

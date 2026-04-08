@@ -42,6 +42,7 @@ router.include_router(extra_handlers.router)
 router.include_router(custom_commands_handlers.router)
 
 ORDER_ACTION_CONTEXT: dict[tuple[int, int], dict] = {}
+REVIEW_REPLY_CONTEXT: dict[int, dict] = {}
 
 
 # Утилита: безопасное приведение к float (чтобы избежать ошибок форматирования, если приходит dict)
@@ -184,6 +185,11 @@ class LotTestState(StatesGroup):
     waiting_for_price = State()
 
 
+class ReviewReplyState(StatesGroup):
+    """Состояние ответа на отзыв"""
+    waiting_for_text = State()
+
+
 def _order_action_context_key(callback: CallbackQuery) -> tuple[int, int]:
     return callback.message.chat.id, callback.message.message_id
 
@@ -204,6 +210,35 @@ def _strip_order_action_buttons(reply_markup: InlineKeyboardMarkup | None) -> In
             rows.append(filtered_row)
 
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def _extract_order_card_field(message_text: str | None, prefix: str) -> str:
+    if not message_text:
+        return ""
+    for line in message_text.splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix):].strip()
+    return ""
+
+
+def _build_short_order_id(order_id: str, message_text: str | None = None) -> str:
+    if message_text:
+        short_id = _extract_order_card_field(message_text, "🆔 ID заказа: ")
+        if short_id.startswith("#"):
+            return short_id[1:].strip()
+    clean_id = order_id.replace("-", "")
+    return clean_id[-8:].upper() if len(clean_id) >= 8 else order_id[:8].upper()
+
+
+def _extract_order_id_from_markup(reply_markup: InlineKeyboardMarkup | None) -> str:
+    if not reply_markup:
+        return ""
+    for row in reply_markup.inline_keyboard:
+        for button in row:
+            url = getattr(button, "url", None)
+            if url and "/order/" in url:
+                return url.rsplit("/order/", 1)[-1].strip()
+    return ""
 
 
 # === Функции авторизации ===
@@ -1811,6 +1846,26 @@ async def handle_refund_button(callback: CallbackQuery):
     await callback.answer("⚠️ Подтвердите возврат денег", show_alert=True)
 
 
+@router.callback_query(F.data.startswith("review_reply:"))
+async def handle_review_reply_button(callback: CallbackQuery, state: FSMContext):
+    """Запрос текста ответа на отзыв."""
+    review_id = callback.data.split(":", 1)[1]
+    order_id = _extract_order_id_from_markup(callback.message.reply_markup)
+    if not order_id:
+        await callback.answer("❌ Не удалось определить заказ для ответа на отзыв", show_alert=True)
+        return
+
+    REVIEW_REPLY_CONTEXT[callback.from_user.id] = {
+        "review_id": review_id,
+        "order_id": order_id,
+        "message_id": callback.message.message_id,
+        "chat_id": callback.message.chat.id,
+    }
+    await state.set_state(ReviewReplyState.waiting_for_text)
+    await callback.message.answer("💬 Отправьте текст ответа на отзыв или <code>-</code> для отмены.", parse_mode="HTML")
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("confirm:"))
 async def handle_confirm_order(callback: CallbackQuery, **kwargs):
     """Обработка подтверждения заказа"""
@@ -1878,6 +1933,20 @@ async def handle_mark_seller_completed(callback: CallbackQuery, **kwargs):
     try:
         await callback.answer("⏳ Отмечаю заказ выполненным...", show_alert=False)
         await starvell.mark_seller_completed(order_id)
+        message_text = callback.message.text or callback.message.html_text or ""
+        short_id = _build_short_order_id(order_id, message_text)
+        buyer_name = _extract_order_card_field(message_text, "👤 Покупатель: ") or "Неизвестно"
+        seller_name = "Неизвестно"
+        try:
+            user_info = starvell.last_user_info or await starvell.get_user_info()
+            seller_name = (
+                (user_info.get("user") or {}).get("username")
+                or (user_info.get("user") or {}).get("nickname")
+                or (user_info.get("user") or {}).get("name")
+                or "Неизвестно"
+            )
+        except Exception:
+            pass
         context = ORDER_ACTION_CONTEXT.pop(_order_action_context_key(callback), {})
         original_markup = context.get("original_markup")
         reduced_markup = _strip_order_action_buttons(original_markup)
@@ -1885,6 +1954,15 @@ async def handle_mark_seller_completed(callback: CallbackQuery, **kwargs):
             callback.message.text + "\n\n✅ <b>Заказ отмечен выполненным.</b>",
             reply_markup=reduced_markup
         )
+        from tg_bot.notifications import get_notification_manager
+        notifier = get_notification_manager()
+        if notifier:
+            await notifier.notify_order_marked_completed(
+                order_id=order_id,
+                short_id=short_id,
+                buyer=buyer_name,
+                seller=seller_name,
+            )
     except Exception as e:
         await callback.answer(f"❌ Ошибка при подтверждении выполнения: {str(e)}", show_alert=True)
 
@@ -1928,3 +2006,65 @@ async def handle_refund_cancel(callback: CallbackQuery):
     if original_markup:
         await callback.message.edit_reply_markup(reply_markup=original_markup)
     await callback.answer("Отменено")
+
+
+@router.message(ReviewReplyState.waiting_for_text)
+async def process_review_reply_text(message: Message, state: FSMContext, **kwargs):
+    """Обработка текста ответа на отзыв."""
+    starvell = kwargs.get("starvell")
+    if not starvell:
+        await message.answer("❌ Ошибка: сервис Starvell недоступен")
+        REVIEW_REPLY_CONTEXT.pop(message.from_user.id, None)
+        await state.clear()
+        return
+
+    context = REVIEW_REPLY_CONTEXT.get(message.from_user.id)
+    if not context:
+        await message.answer("❌ Контекст ответа на отзыв потерян")
+        await state.clear()
+        return
+
+    text = (message.text or "").strip()
+    if text == "-":
+        REVIEW_REPLY_CONTEXT.pop(message.from_user.id, None)
+        await state.clear()
+        await message.answer("Отменено.")
+        return
+
+    try:
+        await starvell.create_review_response(
+            review_id=context["review_id"],
+            content=text,
+            order_id=context["order_id"],
+        )
+
+        await message.answer("✅ Ответ на отзыв отправлен.")
+
+        try:
+            original_message = await message.bot.edit_message_reply_markup(
+                chat_id=context["chat_id"],
+                message_id=context["message_id"],
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="💰 Вернуть деньги",
+                                callback_data=f"refund:{context['order_id']}",
+                            )
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="🔗 Открыть заказ",
+                                url=f"https://starvell.com/order/{context['order_id']}",
+                            )
+                        ],
+                    ]
+                ),
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при отправке ответа на отзыв: {e}")
+    finally:
+        REVIEW_REPLY_CONTEXT.pop(message.from_user.id, None)
+        await state.clear()

@@ -20,6 +20,7 @@ class NotificationType:
     NEW_ORDER = "new_order"
     ORDER_CONFIRMED = "order_confirmed"
     ORDER_CANCELLED = "order_cancelled"
+    REVIEW = "review"
     LOT_DEACTIVATED = "lot_deactivated"
     LOT_RESTORED = "lot_restored"
     LOT_BUMPED = "lot_bumped"
@@ -43,6 +44,7 @@ class NotificationManager:
         NotificationType.NEW_ORDER: "📦",
         NotificationType.ORDER_CONFIRMED: "✅",
         NotificationType.ORDER_CANCELLED: "❌",
+        NotificationType.REVIEW: "⭐",
         NotificationType.LOT_DEACTIVATED: "🚫",
         NotificationType.LOT_RESTORED: "🔄",
         NotificationType.LOT_BUMPED: "⬆️",
@@ -62,7 +64,8 @@ class NotificationManager:
         NotificationType.SUPPORT_MESSAGE: "Сообщение от поддержки",
         NotificationType.NEW_ORDER: "Новый заказ",
         NotificationType.ORDER_CONFIRMED: "Заказ подтверждён",
-        NotificationType.ORDER_CANCELLED: "Заказ отменён",
+        NotificationType.ORDER_CANCELLED: "Деньги возвращены",
+        NotificationType.REVIEW: "Новый отзыв",
         NotificationType.LOT_DEACTIVATED: "Лот деактивирован",
         NotificationType.LOT_RESTORED: "Лот восстановлен",
         NotificationType.LOT_BUMPED: "Лот поднят",
@@ -122,14 +125,16 @@ class NotificationManager:
         config_map = {
             NotificationType.NEW_MESSAGE: BotConfig.NOTIFY_NEW_MESSAGES,
             NotificationType.SUPPORT_MESSAGE: BotConfig.NOTIFY_SUPPORT_MESSAGES,
-            NotificationType.NEW_ORDER: BotConfig.NOTIFY_NEW_ORDERS,
-            NotificationType.LOT_RESTORED: BotConfig.NOTIFY_LOT_RESTORE,
-            NotificationType.LOT_BUMPED: BotConfig.NOTIFY_LOT_BUMP,
-            NotificationType.LOT_DEACTIVATED: BotConfig.NOTIFY_LOT_DEACTIVATE,
-            NotificationType.BOT_STARTED: BotConfig.NOTIFY_BOT_START,
-            NotificationType.BOT_STOPPED: BotConfig.NOTIFY_BOT_STOP,
-            NotificationType.ORDER_CONFIRMED: BotConfig.NOTIFY_ORDER_CONFIRMED,
-        }
+        NotificationType.NEW_ORDER: BotConfig.NOTIFY_NEW_ORDERS,
+        NotificationType.LOT_RESTORED: BotConfig.NOTIFY_LOT_RESTORE,
+        NotificationType.LOT_BUMPED: BotConfig.NOTIFY_LOT_BUMP,
+        NotificationType.LOT_DEACTIVATED: BotConfig.NOTIFY_LOT_DEACTIVATE,
+        NotificationType.BOT_STARTED: BotConfig.NOTIFY_BOT_START,
+        NotificationType.BOT_STOPPED: BotConfig.NOTIFY_BOT_STOP,
+        NotificationType.ORDER_CONFIRMED: BotConfig.NOTIFY_ORDER_CONFIRMED,
+        NotificationType.ORDER_CANCELLED: BotConfig.NOTIFY_ORDER_CONFIRMED,
+        NotificationType.REVIEW: BotConfig.NOTIFY_REVIEW,
+    }
         
         # Если есть соответствующая настройка в конфиге
         if notif_type in config_map:
@@ -504,6 +509,140 @@ class NotificationManager:
         
         # Вызываем хэндлеры модулей для новых заказов
         await self._run_plugin_handlers_for_new_order(order_data)
+
+    @staticmethod
+    def _build_order_link_keyboard(order_id: str) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔗 Открыть заказ",
+                        url=f"https://starvell.com/order/{order_id}"
+                    )
+                ]
+            ]
+        )
+
+    @staticmethod
+    def _build_review_keyboard(order_id: str, review_id: str | None = None, can_reply: bool = True) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = []
+        first_row: list[InlineKeyboardButton] = []
+        if review_id and can_reply and len(f"review_reply:{review_id}") <= 64:
+            first_row.append(
+                InlineKeyboardButton(
+                    text="💬 Ответить на отзыв",
+                    callback_data=f"review_reply:{review_id}",
+                )
+            )
+        if order_id and len(f"refund:{order_id}") <= 64:
+            first_row.append(
+                InlineKeyboardButton(
+                    text="💰 Вернуть деньги",
+                    callback_data=f"refund:{order_id}",
+                )
+            )
+        if first_row:
+            rows.append(first_row)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔗 Открыть заказ",
+                    url=f"https://starvell.com/order/{order_id}",
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def notify_order_marked_completed(
+        self,
+        order_id: str,
+        short_id: str,
+        buyer: str,
+        seller: str,
+    ) -> None:
+        message = (
+            f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
+            f"👤 <b>Покупатель:</b> {buyer}\n"
+            f"🏪 <b>Продавец:</b> {seller}\n\n"
+            "Продавец отметил заказ выполненным."
+        )
+        await self.notify_all_admins(
+            NotificationType.ORDER_CONFIRMED,
+            message,
+            keyboard=self._build_order_link_keyboard(order_id),
+            force=False,
+        )
+
+    async def notify_order_buyer_confirmed(
+        self,
+        order_id: str,
+        short_id: str,
+        buyer: str,
+    ) -> None:
+        message = (
+            f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
+            f"👤 <b>Покупатель:</b> {buyer}\n\n"
+            "Покупатель подтвердил выполнение заказа."
+        )
+        await self.notify_all_admins(
+            NotificationType.ORDER_CONFIRMED,
+            message,
+            keyboard=self._build_order_link_keyboard(order_id),
+            force=False,
+        )
+
+    async def notify_order_refunded(
+        self,
+        order_id: str,
+        short_id: str,
+        buyer: str,
+        seller: str,
+    ) -> None:
+        message = (
+            f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
+            f"👤 <b>Покупатель:</b> {buyer}\n"
+            f"🏪 <b>Продавец:</b> {seller}\n\n"
+            "Деньги по заказу были возвращены."
+        )
+        await self.notify_all_admins(
+            NotificationType.ORDER_CANCELLED,
+            message,
+            keyboard=self._build_order_link_keyboard(order_id),
+            force=False,
+        )
+
+    async def notify_order_review(
+        self,
+        order_id: str,
+        short_id: str,
+        buyer: str,
+        rating: str,
+        comment: str,
+        review_id: str | None = None,
+        can_reply: bool = True,
+    ) -> None:
+        try:
+            rating_value = int(float(str(rating)))
+        except (TypeError, ValueError):
+            rating_value = 0
+        stars = "⭐" * max(0, min(rating_value, 5))
+
+        message = (
+            f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
+            f"👤 <b>Покупатель:</b> {buyer}\n"
+            f"⭐ <b>Оценка:</b> {rating}"
+        )
+        if stars:
+            message += f" ({stars})"
+        message += "\n"
+        if comment:
+            message += f"💬 <b>Комментарий:</b> {comment}\n"
+        await self.notify_all_admins(
+            NotificationType.REVIEW,
+            message,
+            keyboard=self._build_review_keyboard(order_id, review_id, can_reply),
+            force=False,
+        )
 
     async def notify_lots_raised(
         self,
