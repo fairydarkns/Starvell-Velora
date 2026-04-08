@@ -416,13 +416,23 @@ class NotificationManager:
         # Создаём кнопки
         buttons = []
 
+        action_row = []
         if order_id and len(f"complete:{order_id}") <= 64:
-            buttons.append([
+            action_row.append(
                 InlineKeyboardButton(
                     text="✅ Подтвердить выполнение",
                     callback_data=f"complete:{order_id}"
                 )
-            ])
+            )
+        if order_id and len(f"refund:{order_id}") <= 64:
+            action_row.append(
+                InlineKeyboardButton(
+                    text="💰 Вернуть деньги",
+                    callback_data=f"refund:{order_id}"
+                )
+            )
+        if action_row:
+            buttons.append(action_row)
         
         # Получаем chat_id покупателя из order_data
         chat_id = None

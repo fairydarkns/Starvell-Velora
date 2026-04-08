@@ -41,6 +41,8 @@ router.include_router(templates_handlers.router)
 router.include_router(extra_handlers.router)
 router.include_router(custom_commands_handlers.router)
 
+ORDER_ACTION_CONTEXT: dict[tuple[int, int], dict] = {}
+
 
 # Утилита: безопасное приведение к float (чтобы избежать ошибок форматирования, если приходит dict)
 def _safe_float(val, default=0.0):
@@ -180,6 +182,28 @@ class LotTestState(StatesGroup):
     """Состояния тестового управления лотами"""
     waiting_for_lot_id = State()
     waiting_for_price = State()
+
+
+def _order_action_context_key(callback: CallbackQuery) -> tuple[int, int]:
+    return callback.message.chat.id, callback.message.message_id
+
+
+def _strip_order_action_buttons(reply_markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup | None:
+    if not reply_markup:
+        return None
+
+    rows = []
+    for row in reply_markup.inline_keyboard:
+        filtered_row = []
+        for button in row:
+            callback_data = getattr(button, "callback_data", None)
+            if callback_data and (callback_data.startswith("complete:") or callback_data.startswith("refund:")):
+                continue
+            filtered_row.append(button)
+        if filtered_row:
+            rows.append(filtered_row)
+
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
 # === Функции авторизации ===
@@ -1764,18 +1788,20 @@ async def process_quick_reply(message: Message, state: FSMContext, **kwargs):
 @router.callback_query(F.data.startswith("refund:"))
 async def handle_refund_button(callback: CallbackQuery):
     """Обработка нажатия кнопки 'Вернуть деньги' - запрос подтверждения"""
-    # Извлекаем короткий ID заказа
-    short_order_id = callback.data.split(":", 1)[1]
-    
-    # Создаем кнопки подтверждения
+    order_id = callback.data.split(":", 1)[1]
+    ORDER_ACTION_CONTEXT[_order_action_context_key(callback)] = {
+        "order_id": order_id,
+        "original_markup": callback.message.reply_markup,
+    }
+
     confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(
                 text="✅ Да, вернуть",
-                callback_data=f"refund_confirm:{short_order_id}"
+                callback_data=f"refund_confirm:{order_id}"
             ),
             InlineKeyboardButton(
-                text="❌ Отмена",
+                text="❌ Нет",
                 callback_data="refund_cancel"
             )
         ]
@@ -1814,6 +1840,32 @@ async def handle_confirm_order(callback: CallbackQuery, **kwargs):
 
 
 @router.callback_query(F.data.startswith("complete:"))
+async def handle_complete_button(callback: CallbackQuery):
+    """Запрос подтверждения ручной отметки заказа выполненным."""
+    order_id = callback.data.split(":", 1)[1]
+    ORDER_ACTION_CONTEXT[_order_action_context_key(callback)] = {
+        "order_id": order_id,
+        "original_markup": callback.message.reply_markup,
+    }
+
+    confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, подтвердить",
+                callback_data=f"complete_confirm:{order_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Нет",
+                callback_data="refund_cancel"
+            )
+        ]
+    ])
+
+    await callback.message.edit_reply_markup(reply_markup=confirm_keyboard)
+    await callback.answer("⚠️ Подтвердите выполнение заказа", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("complete_confirm:"))
 async def handle_mark_seller_completed(callback: CallbackQuery, **kwargs):
     """Обработка ручной отметки заказа выполненным."""
     order_id = callback.data.split(":", 1)[1]
@@ -1826,9 +1878,12 @@ async def handle_mark_seller_completed(callback: CallbackQuery, **kwargs):
     try:
         await callback.answer("⏳ Отмечаю заказ выполненным...", show_alert=False)
         await starvell.mark_seller_completed(order_id)
+        context = ORDER_ACTION_CONTEXT.pop(_order_action_context_key(callback), {})
+        original_markup = context.get("original_markup")
+        reduced_markup = _strip_order_action_buttons(original_markup)
         await callback.message.edit_text(
             callback.message.text + "\n\n✅ <b>Заказ отмечен выполненным.</b>",
-            reply_markup=None
+            reply_markup=reduced_markup
         )
     except Exception as e:
         await callback.answer(f"❌ Ошибка при подтверждении выполнения: {str(e)}", show_alert=True)
@@ -1837,7 +1892,7 @@ async def handle_mark_seller_completed(callback: CallbackQuery, **kwargs):
 @router.callback_query(F.data.startswith("refund_confirm:"))
 async def handle_refund_confirm(callback: CallbackQuery, **kwargs):
     """Подтверждение возврата денег"""
-    short_order_id = callback.data.split(":", 1)[1]
+    order_id = callback.data.split(":", 1)[1]
     
     # Получаем starvell из kwargs
     starvell = kwargs.get('starvell')
@@ -1850,23 +1905,26 @@ async def handle_refund_confirm(callback: CallbackQuery, **kwargs):
         # Выполняем возврат
         await callback.answer("⏳ Выполняется возврат...", show_alert=False)
         
-        result = await starvell.refund_order(short_order_id)
+        await starvell.refund_order(order_id)
+        context = ORDER_ACTION_CONTEXT.pop(_order_action_context_key(callback), {})
+        original_markup = context.get("original_markup")
+        reduced_markup = _strip_order_action_buttons(original_markup)
         
         # Обновляем сообщение
         await callback.message.edit_text(
             callback.message.text + "\n\n💰 <b>Деньги возвращены!</b>",
-            reply_markup=None
+            reply_markup=reduced_markup
         )
         
     except Exception as e:
         await callback.answer(f"❌ Ошибка при возврате: {str(e)}", show_alert=True)
-        # Восстанавливаем исходные кнопки
-        await callback.message.edit_reply_markup(reply_markup=callback.message.reply_markup)
 
 
 @router.callback_query(F.data == "refund_cancel")
 async def handle_refund_cancel(callback: CallbackQuery):
     """Отмена возврата денег"""
-    # Восстанавливаем исходные кнопки
-    await callback.message.edit_reply_markup(reply_markup=callback.message.reply_markup)
+    context = ORDER_ACTION_CONTEXT.pop(_order_action_context_key(callback), {})
+    original_markup = context.get("original_markup")
+    if original_markup:
+        await callback.message.edit_reply_markup(reply_markup=original_markup)
     await callback.answer("Отменено")
