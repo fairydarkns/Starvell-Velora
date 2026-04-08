@@ -215,6 +215,22 @@ class BackgroundTasks:
             return f"ID{buyer_id}"
         return "Неизвестно"
 
+    @staticmethod
+    def _extract_review_from_order_details(order_details: dict) -> dict:
+        page_props = order_details.get("pageProps", {})
+        bff = page_props.get("bff") or {}
+        candidates = (
+            page_props.get("review"),
+            (page_props.get("order") or {}).get("review"),
+            bff.get("review"),
+            (bff.get("order") or {}).get("review"),
+            (bff.get("orderDetails") or {}).get("review"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate:
+                return candidate
+        return {}
+
     async def _handle_socket_notification(self, message: dict):
         metadata = message.get("metadata") or {}
         notification_type = str(metadata.get("notificationType") or "").upper()
@@ -246,33 +262,25 @@ class BackgroundTasks:
         order_status = str(order.get("status") or "").upper()
         short_id = self._build_short_order_id(order_id, order)
         buyer_name = self._resolve_buyer_name(order, message)
+        buyer_id = str(message.get("buyerId") or order.get("buyerId") or (message.get("buyer") or {}).get("id") or "")
+        if (buyer_id and buyer_id == self._my_user_id) or (buyer_name and self._my_username and buyer_name == self._my_username):
+            return
         seller_name = self._my_username or "Неизвестно"
         review = order.get("review") or {}
 
-        refund_types = {"ORDER_REFUNDED", "ORDER_CANCELLED", "ORDER_CANCELED"}
+        refund_types = {"ORDER_REFUND", "ORDER_REFUNDED", "ORDER_CANCELLED", "ORDER_CANCELED"}
         refund_statuses = {"REFUNDED", "CANCELLED", "CANCELED"}
-        buyer_confirm_types = {
-            "ORDER_CONFIRMED",
-            "ORDER_COMPLETED",
-            "ORDER_COMPLETED_BY_BUYER",
-            "BUYER_CONFIRMED",
-            "BUYER_COMPLETED",
-        }
-        seller_confirm_types = {
-            "ORDER_MARKED_COMPLETED",
-            "ORDER_COMPLETED_BY_SELLER",
-            "SELLER_CONFIRMED",
-            "SELLER_COMPLETED",
-        }
+        buyer_confirm_types = {"ORDER_COMPLETED", "ORDER_CONFIRMED"}
+        seller_confirm_types = {"ORDER_SELLER_COMPLETED", "ORDER_MARKED_COMPLETED"}
         seller_confirm_statuses = {"WAITING_CONFIRMATION", "PENDING_CONFIRMATION"}
+        review_created_types = {"REVIEW_CREATED"}
+        review_deleted_types = {"REVIEW_DELETED"}
 
-        if review or "REVIEW" in notification_type:
+        if notification_type in review_created_types:
             if order_id:
                 try:
                     order_details = await self.starvell.get_order_details(order_id)
-                    page_props = order_details.get("pageProps", {})
-                    detailed_order = page_props.get("order") or page_props.get("bff", {}).get("order") or {}
-                    review = detailed_order.get("review") or review or {}
+                    review = self._extract_review_from_order_details(order_details) or review or {}
                 except Exception as e:
                     logger.debug("Не удалось получить детали отзыва по заказу %s: %s", order_id, e)
             if review:
@@ -286,11 +294,15 @@ class BackgroundTasks:
                     can_reply=not bool(review.get("reviewResponse")),
                 )
             else:
-                await self.notifier.notify_order_review_removed(
-                    order_id=order_id,
-                    short_id=short_id,
-                    buyer=buyer_name,
-                )
+                logger.debug("Не нашел review в деталях заказа %s для REVIEW_CREATED", order_id)
+            return
+
+        if notification_type in review_deleted_types:
+            await self.notifier.notify_order_review_removed(
+                order_id=order_id,
+                short_id=short_id,
+                buyer=buyer_name,
+            )
             return
 
         if (
@@ -310,7 +322,6 @@ class BackgroundTasks:
 
         if (
             notification_type in seller_confirm_types
-            or ("SELLER" in notification_type and ("CONFIRM" in notification_type or "COMPLETE" in notification_type))
             or order_status in seller_confirm_statuses
         ):
             await self.notifier.notify_order_marked_completed(
@@ -323,7 +334,6 @@ class BackgroundTasks:
 
         if (
             notification_type in buyer_confirm_types
-            or ("BUYER" in notification_type and ("CONFIRM" in notification_type or "COMPLETE" in notification_type))
             or order_status == "COMPLETED"
         ):
             await self.notifier.notify_order_buyer_confirmed(
