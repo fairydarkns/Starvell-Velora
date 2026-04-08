@@ -3,3 +3,4 @@ aiohttp>=3.9.0
 aiohttp-socks>=0.10.1
 apscheduler>=3.10.0
 colorama>=0.4.6
+python-socketio[client]>=5.11.0

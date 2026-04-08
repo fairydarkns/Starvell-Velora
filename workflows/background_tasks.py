@@ -33,26 +33,33 @@ class BackgroundTasks:
         self._first_check_messages = True  # Флаг первой проверки после запуска
         self._first_check_orders = True  # Флаг первой проверки заказов после запуска
         self._auto_ticket_first_run_done = False  # Флаг первого запуска авто-тикетов
+        self._realtime_task: asyncio.Task | None = None
+        self._my_user_id: str = ""
+        self._my_username: str = ""
         
     def start(self):
         """Запустить фоновые задачи"""
-        # Проверка новых сообщений
-        chat_interval = 5
-        self.scheduler.add_job(
-            self._check_new_messages_loop,
-            'interval',
-            seconds=max(1, int(chat_interval)),
-            id='check_messages',
-        )
-        
-        # Проверка новых заказов
-        orders_interval = get_config_manager().get('Monitor', 'ordersPollInterval', 5)
-        self.scheduler.add_job(
-            self._check_new_orders_loop,
-            'interval',
-            seconds=max(1, int(orders_interval)),
-            id='check_orders',
-        )
+        if self.starvell.realtime_enabled:
+            self._realtime_task = asyncio.create_task(self._realtime_loop())
+            logger.info("Realtime-обработка сообщений и заказов включена через websocket")
+        else:
+            # Проверка новых сообщений
+            chat_interval = 5
+            self.scheduler.add_job(
+                self._check_new_messages_loop,
+                'interval',
+                seconds=max(1, int(chat_interval)),
+                id='check_messages',
+            )
+            
+            # Проверка новых заказов
+            orders_interval = get_config_manager().get('Monitor', 'ordersPollInterval', 5)
+            self.scheduler.add_job(
+                self._check_new_orders_loop,
+                'interval',
+                seconds=max(1, int(orders_interval)),
+                id='check_orders',
+            )
         
         # Авто-bump офферов
         if BotConfig.AUTO_BUMP_ENABLED():
@@ -106,8 +113,111 @@ class BackgroundTasks:
         
     def stop(self):
         """Остановить фоновые задачи"""
+        if self._realtime_task:
+            self._realtime_task.cancel()
+            self._realtime_task = None
         self.scheduler.shutdown()
         logger.info("Фоновые задачи остановлены")
+
+    async def _ensure_current_user(self):
+        if self._my_user_id and self._my_username:
+            return
+        user_info = self.starvell.last_user_info or await self.starvell.get_user_info()
+        user = user_info.get("user", {})
+        self._my_user_id = str(user.get("id", ""))
+        self._my_username = str(user.get("username", ""))
+
+    async def _realtime_loop(self):
+        """Обработка realtime-событий из websocket."""
+        while True:
+            try:
+                event = await self.starvell.wait_realtime_event()
+                await self._handle_realtime_event(event)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Ошибка в realtime-цикле: {e}", exc_info=True)
+                await asyncio.sleep(1)
+
+    async def _handle_realtime_event(self, event: dict):
+        event_name = event.get("event")
+        payload = event.get("data") or {}
+
+        if event_name == "message_created":
+            await self._handle_socket_message(payload)
+            return
+        if event_name == "sale_update":
+            await self._handle_socket_sale_update(payload)
+            return
+        if event_name == "chat_read":
+            logger.debug(
+                "Socket: чат прочитан пользователем %s в чате %s",
+                payload.get("readerUserId"),
+                payload.get("chatId"),
+            )
+            return
+        if event_name == "viewed_offer":
+            logger.debug(
+                "Socket: просмотрен лот %s пользователем %s",
+                (payload.get("offer") or {}).get("id"),
+                payload.get("buyerId"),
+            )
+
+    async def _handle_socket_message(self, message: dict):
+        chat_id = str(message.get("chatId") or "")
+        if not chat_id:
+            return
+
+        if message.get("type") == "NOTIFICATION":
+            metadata = message.get("metadata") or {}
+            if metadata.get("notificationType") == "ORDER_PAYMENT":
+                order = dict(message.get("order") or {})
+                order_id = str(metadata.get("orderId") or order.get("id") or "")
+                if not order_id:
+                    return
+                order["id"] = order_id
+                order["buyerId"] = message.get("buyerId") or (message.get("buyer") or {}).get("id")
+                order["buyer"] = message.get("buyer") or order.get("buyer") or {}
+                order["user"] = order.get("buyer") or order.get("user") or {}
+                order["chat_id"] = chat_id
+                order["chatId"] = chat_id
+                order["_notification_type"] = metadata.get("notificationType")
+                order["_message_id"] = message.get("id")
+                await self._process_order(order)
+            return
+
+        await self._process_message(
+            {
+                "chat_id": chat_id,
+                "message": message,
+                "chat": {},
+            }
+        )
+
+    async def _handle_socket_sale_update(self, payload: dict):
+        order_id = str(payload.get("orderId") or "")
+        if not order_id:
+            return
+        try:
+            details = await self.starvell.get_order_details(order_id)
+            page_props = details.get("pageProps", {})
+            order = dict(page_props.get("order") or {})
+            if not order:
+                logger.warning("Socket sale_update: не удалось извлечь заказ %s", order_id)
+                return
+            order["id"] = order_id
+            chat = page_props.get("chat") or {}
+            if chat.get("id"):
+                order["chat_id"] = str(chat.get("id"))
+                order["chatId"] = str(chat.get("id"))
+            buyer = order.get("buyer") or page_props.get("buyer") or order.get("user") or {}
+            if isinstance(buyer, dict):
+                order["buyer"] = buyer
+                order["user"] = buyer
+                order["buyerId"] = order.get("buyerId") or buyer.get("id")
+            await self._process_order(order)
+        except Exception as exc:
+            logger.error(f"Ошибка обработки sale_update для заказа {order_id}: {exc}", exc_info=True)
         
     async def _check_new_messages_loop(self):
         """Polling цикл для проверки новых сообщений"""
@@ -144,101 +254,7 @@ class BackgroundTasks:
                     logger.debug(f"📬 Получено {len(new_messages)} новых сообщений из API Starvell")
             
             for msg_data in new_messages:
-                chat_id = str(msg_data.get("chat_id", ""))
-                message = msg_data.get("message", {})
-                chat = msg_data.get("chat", {})
-                
-                author_id = message.get("authorId", "N/A")
-                content = message.get("content") or message.get("text", "")
-                message_id = message.get("id")
-                
-                # Пропускаем сообщения без контента
-                if not content:
-                    continue
-                
-                # Проверяем черный список по ID
-                config = get_config_manager()
-                blacklist_section = f"Blacklist.{author_id}"
-                if config._config.has_section(blacklist_section):
-                    if BotConfig.DEBUG():
-                        logger.debug(f"Сообщение от пользователя {author_id} игнорируется (в черном списке)")
-                    continue
-                
-                # Получаем username и роли напрямую из данных сообщения
-                # API возвращает message.author.username и message.author.roles
-                author_username = None
-                author_roles = []
-                author_data = message.get("author", {})
-                if author_data:
-                    author_username = author_data.get("username") or author_data.get("name")
-                    author_roles = author_data.get("roles", [])
-                
-                # Если нет в сообщении, пробуем найти в participants чата
-                if not author_username and chat:
-                    participants = chat.get("participants", [])
-                    for participant in participants:
-                        if str(participant.get("id")) == str(author_id):
-                            author_username = participant.get("username") or participant.get("name")
-                            break
-                
-                # Пропускаем свои сообщения, если они не включены в настройках.
-                try:
-                    # Используем кэшированный user_id если он есть
-                    if not hasattr(self, '_my_user_id'):
-                        user_info = await self.starvell.get_user_info()
-                        self._my_user_id = str(user_info.get("user", {}).get("id", ""))
-                    
-                    if str(author_id) == self._my_user_id and not BotConfig.NOTIFY_OWN_MESSAGES():
-                        continue
-                except Exception:
-                    pass
-                
-                # Проверяем, не уведомляли ли уже об этом сообщении
-                if chat_id not in self._seen_messages:
-                    self._seen_messages[chat_id] = set()
-                    
-                if message_id and message_id in self._seen_messages[chat_id]:
-                    continue
-                
-                # Проверяем, является ли сообщение от поддержки/модерации
-                is_support = author_roles and ("SUPPORT" in author_roles or "MODERATOR" in author_roles or "ADMIN" in author_roles)
-                
-                # Отправляем уведомление через NotificationManager
-                if is_support:
-                    # Уведомление о сообщении от поддержки (если включено)
-                    await self.notifier.notify_support_message(
-                        chat_id=chat_id,
-                        author=str(author_id),
-                        content=content,
-                        message_id=str(message_id) if message_id else None,
-                        author_nickname=author_username,
-                        author_roles=author_roles,
-                        raw_message=message,
-                        raw_chat=chat,
-                    )
-                else:
-                    # Обычное уведомление о новом сообщении
-                    await self.notifier.notify_new_message(
-                        chat_id=chat_id,
-                        author=str(author_id),
-                        content=content,
-                        message_id=str(message_id) if message_id else None,
-                        author_nickname=author_username,
-                        raw_message=message,
-                        raw_chat=chat,
-                    )
-                
-                # Запоминаем это сообщение
-                if message_id:
-                    self._seen_messages[chat_id].add(message_id)
-                    
-                # Проверяем кастомные команды
-                await self._check_custom_command(chat_id, content, author_id)
-                
-                # Логируем с указанием роли если есть
-                role_prefix = f"[{', '.join(author_roles)}] " if author_roles else ""
-                display_name = author_username or author_id
-                logger.info(f"📩 Новое сообщение от {role_prefix}{display_name}: {content[:50]}...")
+                await self._process_message(msg_data)
                     
         except Exception as e:
             logger.error(f"Ошибка при проверке новых сообщений: {e}", exc_info=True)
@@ -256,114 +272,179 @@ class BackgroundTasks:
             if new_orders:
                 logger.debug(f"📦 Получено {len(new_orders)} новых заказов из API Starvell")
             
-            user_info = self.starvell.last_user_info or await self.starvell.get_user_info()
-            current_user = user_info.get("user", {})
-            current_user_id = str(current_user.get("id", ""))
-            current_username = str(current_user.get("username", ""))
-
             for order in new_orders:
-                order_id = str(order.get("id", ""))
-                if not order_id:
-                    continue
-
-                status = order.get("status", "CREATED")
-
-                buyer_obj = order.get("buyer") or order.get("user") or {}
-                buyer_id = str(order.get("buyerId") or buyer_obj.get("id") or "")
-                buyer_username = str(
-                    buyer_obj.get("username") or
-                    buyer_obj.get("nickname") or
-                    buyer_obj.get("name") or
-                    ""
-                )
-
-                if (buyer_id and buyer_id == current_user_id) or (
-                    buyer_username and current_username and buyer_username == current_username
-                ):
-                    continue
-
-                # Получаем короткий ID (последние 8 символов без дефисов)
-                short_id = order.get("shortId", "")
-                if not short_id:
-                    # Берём последние 8 символов ID (без дефисов)
-                    clean_id = order_id.replace("-", "")
-                    short_id = clean_id[-8:].upper() if len(clean_id) >= 8 else order_id[:8].upper()
-                
-                # Получаем цену (API возвращает в копейках, конвертируем в рубли)
-                # basePrice - ваш доход, totalPrice - сколько заплатил покупатель
-                amount_kopecks = order.get("totalPrice") or order.get("basePrice") or order.get("price") or order.get("amount") or 0
-                amount = amount_kopecks / 100  # Конвертируем копейки в рубли
-                
-                # Debug: логируем все поля цены
-                logger.debug(f"Поля цены в заказе {order_id[:8]}: totalPrice={order.get('totalPrice')}, basePrice={order.get('basePrice')} (конвертировано: {amount} ₽)")
-                
-                # Получаем данные покупателя
-                buyer = order.get("user") or {}
-                buyer_id = order.get("buyerId")
-                buyer_name = "Неизвестно"
-                
-                if isinstance(buyer, dict):
-                    # Извлекаем имя из user объекта
-                    buyer_name = (
-                        buyer.get("username") or 
-                        buyer.get("nickname") or 
-                        buyer.get("name") or 
-                        buyer.get("displayName") or
-                        f"ID{buyer.get('id', buyer_id)}"
-                    )
-                elif buyer_id:
-                    # Fallback: если user отсутствует, используем buyerId
-                    buyer_name = f"ID{buyer_id}"
-                    # Создаём минимальный user объект для плагинов
-                    order["user"] = {
-                        "id": buyer_id,
-                        "username": buyer_name
-                    }
-                
-                # Получаем данные лота (в Starvell API это offerDetails)
-                lot = order.get("offerDetails") or order.get("listing") or order.get("lot") or order.get("offer") or {}
-                lot_name = "Неизвестно"
-                
-                if isinstance(lot, dict):
-                    # Для Starvell API: offerDetails.descriptions.rus.briefDescription
-                    descriptions = lot.get("descriptions", {})
-                    if descriptions:
-                        rus_desc = descriptions.get("rus", {})
-                        lot_name = (
-                            rus_desc.get("briefDescription") or 
-                            rus_desc.get("description") or
-                            lot.get("name") or 
-                            lot.get("title") or
-                            "Неизвестно"
-                        )
-                    else:
-                        # Fallback для других форматов
-                        lot_name = (
-                            lot.get("name") or 
-                            lot.get("title") or 
-                            lot.get("description") or
-                            "Неизвестно"
-                        )
-                elif isinstance(lot, str):
-                    lot_name = lot
-                
-                # Отправляем уведомление через NotificationManager
-                await self.notifier.notify_new_order(
-                    order_id=order_id,
-                    short_id=short_id,
-                    buyer=buyer_name,
-                    amount=float(amount),
-                    lot_name=lot_name,
-                    status=status,
-                    order_data=order
-                )
-                
-                # Логируем с полными данными для отладки
-                logger.info(f"🛒 Новый заказ #{short_id} от {buyer_name}: {lot_name} - {amount}₽")
-                logger.debug(f"Полные данные заказа: {order}")
+                await self._process_order(order)
                     
         except Exception as e:
             logger.error(f"Ошибка при проверке новых заказов: {e}", exc_info=True)
+
+    async def _process_message(self, msg_data: dict):
+        chat_id = str(msg_data.get("chat_id", ""))
+        message = msg_data.get("message", {})
+        chat = msg_data.get("chat", {})
+
+        author_id = str(message.get("authorId", "N/A"))
+        content = message.get("content") or message.get("text", "")
+        message_id = message.get("id")
+
+        if not content:
+            return
+
+        config = get_config_manager()
+        blacklist_section = f"Blacklist.{author_id}"
+        if config._config.has_section(blacklist_section):
+            if BotConfig.DEBUG():
+                logger.debug(f"Сообщение от пользователя {author_id} игнорируется (в черном списке)")
+            return
+
+        author_username = None
+        author_roles = []
+        author_data = message.get("author", {})
+        if author_data:
+            author_username = author_data.get("username") or author_data.get("name")
+            author_roles = author_data.get("roles", [])
+
+        if not author_username and chat:
+            participants = chat.get("participants", [])
+            for participant in participants:
+                if str(participant.get("id")) == str(author_id):
+                    author_username = participant.get("username") or participant.get("name")
+                    break
+
+        await self._ensure_current_user()
+        is_own_message = bool(self._my_user_id and str(author_id) == self._my_user_id)
+        if is_own_message and not BotConfig.NOTIFY_OWN_MESSAGES():
+            return
+
+        if chat_id not in self._seen_messages:
+            self._seen_messages[chat_id] = set()
+        if message_id and message_id in self._seen_messages[chat_id]:
+            return
+
+        is_support = bool(author_roles and ("SUPPORT" in author_roles or "MODERATOR" in author_roles or "ADMIN" in author_roles))
+        if is_support:
+            await self.notifier.notify_support_message(
+                chat_id=chat_id,
+                author=str(author_id),
+                content=content,
+                message_id=str(message_id) if message_id else None,
+                author_nickname=author_username,
+                author_roles=author_roles,
+                raw_message=message,
+                raw_chat=chat,
+            )
+        else:
+            await self.notifier.notify_new_message(
+                chat_id=chat_id,
+                author=str(author_id),
+                content=content,
+                message_id=str(message_id) if message_id else None,
+                author_nickname=author_username,
+                raw_message=message,
+                raw_chat=chat,
+            )
+
+        if message_id:
+            self._seen_messages[chat_id].add(message_id)
+
+        if not is_own_message and BotConfig.AUTO_READ_ENABLED():
+            await self.starvell.mark_chat_as_read(chat_id)
+
+        await self._check_custom_command(chat_id, content, author_id)
+
+        role_prefix = f"[{', '.join(author_roles)}] " if author_roles else ""
+        display_name = author_username or author_id
+        logger.info(f"📩 Новое сообщение от {role_prefix}{display_name}: {content[:50]}...")
+
+    async def _process_order(self, order: dict):
+        order_id = str(order.get("id", ""))
+        if not order_id:
+            return
+
+        await self._ensure_current_user()
+        status = order.get("status", "CREATED")
+
+        buyer_obj = order.get("buyer") or order.get("user") or {}
+        buyer_id = str(order.get("buyerId") or buyer_obj.get("id") or "")
+        buyer_username = str(
+            buyer_obj.get("username") or
+            buyer_obj.get("nickname") or
+            buyer_obj.get("name") or
+            ""
+        )
+
+        if (buyer_id and buyer_id == self._my_user_id) or (
+            buyer_username and self._my_username and buyer_username == self._my_username
+        ):
+            return
+
+        last_known = await self.db.get_last_order(order_id)
+        if last_known and last_known.get("status") == status:
+            return
+
+        short_id = order.get("shortId", "")
+        if not short_id:
+            clean_id = order_id.replace("-", "")
+            short_id = clean_id[-8:].upper() if len(clean_id) >= 8 else order_id[:8].upper()
+
+        amount_kopecks = order.get("totalPrice") or order.get("basePrice") or order.get("price") or order.get("amount") or 0
+        amount = amount_kopecks / 100
+
+        buyer = order.get("user") or order.get("buyer") or {}
+        buyer_id = order.get("buyerId")
+        buyer_name = "Неизвестно"
+
+        if isinstance(buyer, dict):
+            buyer_name = (
+                buyer.get("username") or
+                buyer.get("nickname") or
+                buyer.get("name") or
+                buyer.get("displayName") or
+                f"ID{buyer.get('id', buyer_id)}"
+            )
+        elif buyer_id:
+            buyer_name = f"ID{buyer_id}"
+            order["user"] = {
+                "id": buyer_id,
+                "username": buyer_name,
+            }
+
+        lot = order.get("offerDetails") or order.get("listing") or order.get("lot") or order.get("offer") or {}
+        lot_name = "Неизвестно"
+        if isinstance(lot, dict):
+            descriptions = lot.get("descriptions", {})
+            if descriptions:
+                rus_desc = descriptions.get("rus", {})
+                lot_name = (
+                    rus_desc.get("briefDescription") or
+                    rus_desc.get("description") or
+                    lot.get("name") or
+                    lot.get("title") or
+                    "Неизвестно"
+                )
+            else:
+                lot_name = (
+                    lot.get("name") or
+                    lot.get("title") or
+                    lot.get("description") or
+                    "Неизвестно"
+                )
+        elif isinstance(lot, str):
+            lot_name = lot
+
+        await self.notifier.notify_new_order(
+            order_id=order_id,
+            short_id=short_id,
+            buyer=buyer_name,
+            amount=float(amount),
+            lot_name=lot_name,
+            status=status,
+            order_data=order,
+        )
+        await self.db.set_last_order(order_id, status)
+
+        logger.info(f"🛒 Новый заказ #{short_id} от {buyer_name}: {lot_name} - {amount}₽")
+        logger.debug(f"Полные данные заказа: {order}")
             
     async def _auto_bump(self):
         """Автоматическое поднятие офферов"""
@@ -448,8 +529,7 @@ class BackgroundTasks:
         try:
             import json
             from pathlib import Path
-            
-            # Загружаем кастомные команды
+
             commands_file = Path("storage/telegram/custom_commands.json")
             legacy_commands_file = Path("storage/custom_commands.json")
             if not commands_file.exists() and legacy_commands_file.exists():
@@ -461,7 +541,7 @@ class BackgroundTasks:
                     return
             if not commands_file.exists():
                 return
-            
+
             with open(commands_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             

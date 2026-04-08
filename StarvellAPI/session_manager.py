@@ -82,6 +82,11 @@ class SessionManager:
         """Получить SID cookie"""
         return self._sid_cookie
 
+    def build_cookie_header(self, include_sid: bool = False) -> str:
+        """Собрать Cookie header для внешних клиентов, например Socket.IO."""
+        cookies = self._get_cookies(include_sid)
+        return "; ".join(f"{key}={value}" for key, value in cookies.items() if value)
+
     def _get_proxy(self) -> tuple[Optional[str], Optional[BasicAuth]]:
         proxy = BotConfig.PROXY()
         if not proxy:

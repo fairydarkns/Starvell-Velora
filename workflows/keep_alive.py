@@ -37,6 +37,11 @@ class KeepAliveService:
             logger.warning("Сервис вечного онлайна уже запущен")
             return
 
+        if getattr(self.starvell, "realtime_enabled", False):
+            logger.info("Сервис вечного онлайна пропущен: онлайн поддерживается через websocket")
+            self._running = False
+            return
+
         # Проверяем включено ли в конфиге
         if not BotConfig.KEEP_ALIVE_ENABLED():
             logger.info("⏸️ Вечный онлайн отключен в настройках")

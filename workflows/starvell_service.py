@@ -5,6 +5,7 @@
 import asyncio
 from typing import Optional, List, Dict, Any
 from StarvellAPI.gateway_client import StarAPI
+from StarvellAPI.socket_client import StarSocketClient
 from StarvellAPI.api_exceptions import StarAPIError
 from support.runtime_config import BotConfig
 from support.runtime_storage import Database
@@ -16,9 +17,11 @@ class StarvellService:
     def __init__(self, db: Database):
         self.db = db
         self.api: Optional[StarAPI] = None
+        self.socket: Optional[StarSocketClient] = None
         self._lock = asyncio.Lock()
         self._session_error_notified = False  # Флаг для уведомления об ошибке сессии (1 раз)
         self.last_user_info: Dict[str, Any] = {}
+        self._realtime_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
         
     async def start(self):
         """Запустить сервис"""
@@ -29,11 +32,40 @@ class StarvellService:
         await self.api.session.start()
         # Сбрасываем флаг при старте/перезапуске
         self._session_error_notified = False
+        try:
+            self.last_user_info = await self.api.get_user_info()
+        except Exception:
+            self.last_user_info = {}
+        try:
+            self.socket = StarSocketClient(
+                self.api.session,
+                self.api.config,
+                on_event=self._enqueue_realtime_event,
+            )
+            await self.socket.start()
+        except Exception as exc:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("Не удалось запустить realtime socket Starvell: %s", exc)
+            self.socket = None
         
     async def stop(self):
         """Остановить сервис"""
+        if self.socket:
+            await self.socket.stop()
+            self.socket = None
         if self.api:
             await self.api.close()
+
+    @property
+    def realtime_enabled(self) -> bool:
+        return self.socket is not None
+
+    async def _enqueue_realtime_event(self, event: Dict[str, Any]) -> None:
+        await self._realtime_queue.put(event)
+
+    async def wait_realtime_event(self) -> Dict[str, Any]:
+        return await self._realtime_queue.get()
     
     async def _notify_session_error(self):
         """Отправить уведомление об ошибке сессии (только один раз)"""

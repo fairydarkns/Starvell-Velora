@@ -6,6 +6,9 @@ storage/*
 
 logs/*
 
+# test
+test.py
+
 backups/*
 
 plugins/*
