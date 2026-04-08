@@ -73,6 +73,7 @@ class CBT:
     NOTIF_AUTO_TICKET = "notif:auto_ticket"
     NOTIF_ORDER_CONFIRMED = "notif:order_confirmed"
     NOTIF_REVIEW = "notif:review"
+    NOTIF_REVIEW_DELETED = "notif:review_deleted"
     NOTIF_AUTO_RESPONSES = "notif:auto_responses"
     
     # Автовыдача
@@ -304,6 +305,7 @@ def get_notifications_menu(
     auto_ticket: bool = False,
     order_confirm: bool = False,
     review: bool = False,
+    review_deleted: bool = False,
     auto_responses: bool = False,
     support_messages: bool = True,
     own_messages: bool = False,
@@ -315,7 +317,8 @@ def get_notifications_menu(
     - stop: уведомления об остановке бота
     - auto_ticket: уведомления об отправке авто-тикетов
     - order_confirm: уведомления о подтверждении заказа
-    - review: уведомления о новых отзывах
+    - review: уведомления о получении отзывов
+    - review_deleted: уведомления об удалении отзывов
     - auto_responses: уведомления о выполнении автоответов/команд
     - support_messages: уведомления о сообщениях от поддержки/модерации
     """
@@ -377,8 +380,14 @@ def get_notifications_menu(
         ],
         [
             InlineKeyboardButton(
-                text=switch_text("Ответ на отзыв", review),
+                text=switch_text("Отзыв получен", review),
                 callback_data=CBT.NOTIF_REVIEW
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text=switch_text("Отзыв удалён", review_deleted),
+                callback_data=CBT.NOTIF_REVIEW_DELETED
             ),
         ],
         [

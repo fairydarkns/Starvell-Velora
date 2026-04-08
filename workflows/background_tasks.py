@@ -277,6 +277,7 @@ class BackgroundTasks:
         review_deleted_types = {"REVIEW_DELETED"}
 
         if notification_type in review_created_types:
+            logger.info("Получено socket-событие REVIEW_CREATED для заказа %s", order_id)
             if order_id:
                 try:
                     order_details = await self.starvell.get_order_details(order_id)
@@ -292,12 +293,14 @@ class BackgroundTasks:
                     comment=str(review.get("content") or review.get("comment") or review.get("text") or ""),
                     review_id=str(review.get("id") or ""),
                     can_reply=not bool(review.get("reviewResponse")),
+                    review_response_id=str((review.get("reviewResponse") or {}).get("id") or ""),
                 )
             else:
                 logger.debug("Не нашел review в деталях заказа %s для REVIEW_CREATED", order_id)
             return
 
         if notification_type in review_deleted_types:
+            logger.info("Получено socket-событие REVIEW_DELETED для заказа %s", order_id)
             await self.notifier.notify_order_review_removed(
                 order_id=order_id,
                 short_id=short_id,

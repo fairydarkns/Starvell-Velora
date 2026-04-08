@@ -87,6 +87,7 @@ class ConfigManager:
             'autoTicket': 'true',
             'orderConfirmed': 'false',
             'review': 'false',
+            'reviewDeleted': 'false',
             'autoResponses': 'false',
         }
 
@@ -609,6 +610,11 @@ class BotConfig:
         return _config_manager.get('Notifications', 'review', False)
 
     @staticmethod
+    def NOTIFY_REVIEW_DELETED() -> bool:
+        """Уведомлять об удалении отзывов"""
+        return _config_manager.get('Notifications', 'reviewDeleted', False)
+
+    @staticmethod
     def NOTIFY_AUTO_RESPONSES() -> bool:
         """Уведомлять при выполнении автоответов/команд"""
         return _config_manager.get('Notifications', 'autoResponses', False)
@@ -846,6 +852,8 @@ class BotConfig:
                         _config_manager.set('Notifications', 'orderConfirmed', value)
                     elif cfg_key == 'review':
                         _config_manager.set('Notifications', 'review', value)
+                    elif cfg_key == 'review_deleted':
+                        _config_manager.set('Notifications', 'reviewDeleted', value)
                     elif cfg_key == 'auto_responses':
                         _config_manager.set('Notifications', 'autoResponses', value)
                     elif cfg_key == 'lot_deactivate':

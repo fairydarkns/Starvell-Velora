@@ -427,6 +427,24 @@ class StarAPI:
             referer=f"{self.config.BASE_URL}/order/{order_id}",
             include_sid=True,
         )
+
+    async def delete_review_response(self, review_response_id: str, order_id: str) -> Dict[str, Any]:
+        """
+        Удалить ответ на отзыв.
+
+        Args:
+            review_response_id: ID ответа на отзыв
+            order_id: ID заказа для referer
+
+        Returns:
+            dict: Результат операции
+        """
+        return await self.session.post_json(
+            f"{self.config.API_URL}/review-responses/{review_response_id}/delete",
+            data={},
+            referer=f"{self.config.BASE_URL}/order/{order_id}",
+            include_sid=True,
+        )
     
     async def get_order_details(self, order_id: str) -> Dict[str, Any]:
         """

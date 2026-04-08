@@ -265,6 +265,12 @@ class StarvellService:
         if not self.api:
             raise RuntimeError("API не инициализирован")
         return await self.api.create_review_response(review_id, content, order_id)
+
+    async def delete_review_response(self, review_response_id: str, order_id: str) -> Dict[str, Any]:
+        """Удалить ответ на отзыв"""
+        if not self.api:
+            raise RuntimeError("API не инициализирован")
+        return await self.api.delete_review_response(review_response_id, order_id)
     
     async def get_order_details(self, order_id: str) -> Dict[str, Any]:
         """Получить детальную информацию о заказе"""

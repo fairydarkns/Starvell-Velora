@@ -120,6 +120,7 @@ def _get_notifications_menu_state() -> dict:
         "auto_ticket": BotConfig.NOTIFY_AUTO_TICKET(),
         "order_confirm": BotConfig.NOTIFY_ORDER_CONFIRMED(),
         "review": BotConfig.NOTIFY_REVIEW(),
+        "review_deleted": BotConfig.NOTIFY_REVIEW_DELETED(),
         "auto_responses": BotConfig.NOTIFY_AUTO_RESPONSES(),
         "support_messages": BotConfig.NOTIFY_SUPPORT_MESSAGES(),
         "own_messages": BotConfig.NOTIFY_OWN_MESSAGES(),
@@ -246,6 +247,41 @@ def _extract_order_id_from_markup(reply_markup: InlineKeyboardMarkup | None) -> 
             if url and "/order/" in url:
                 return url.rsplit("/order/", 1)[-1].strip()
     return ""
+
+
+def _build_review_reply_markup(order_id: str, review_id: str | None = None, response_id: str | None = None) -> InlineKeyboardMarkup:
+    row = []
+    if response_id:
+        row.append(
+            InlineKeyboardButton(
+                text="🗑️ Удалить ответ",
+                callback_data=f"review_delete:{response_id}",
+            )
+        )
+    elif review_id:
+        row.append(
+            InlineKeyboardButton(
+                text="💬 Ответить на отзыв",
+                callback_data=f"review_reply:{review_id}",
+            )
+        )
+    row.append(
+        InlineKeyboardButton(
+            text="💰 Вернуть деньги",
+            callback_data=f"refund:{order_id}",
+        )
+    )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            row,
+            [
+                InlineKeyboardButton(
+                    text="🔗 Открыть заказ",
+                    url=f"https://starvell.com/order/{order_id}",
+                )
+            ],
+        ]
+    )
 
 
 # === Функции авторизации ===
@@ -1742,12 +1778,24 @@ async def callback_notif_stop(callback: CallbackQuery):
 
 @router.callback_query(F.data == CBT.NOTIF_REVIEW)
 async def callback_notif_review(callback: CallbackQuery):
-    """Переключить уведомления о новых отзывах"""
+    """Переключить уведомления о получении отзывов"""
     current = BotConfig.NOTIFY_REVIEW()
     BotConfig.update(**{"notifications.review": not current})
 
     status = "включены" if not current else "выключены"
-    await callback.answer(f"Уведомления о новых отзывах {status}", show_alert=False)
+    await callback.answer(f"Уведомления о получении отзыва {status}", show_alert=False)
+
+    await _refresh_notifications_menu(callback)
+
+
+@router.callback_query(F.data == CBT.NOTIF_REVIEW_DELETED)
+async def callback_notif_review_deleted(callback: CallbackQuery):
+    """Переключить уведомления об удалении отзывов"""
+    current = BotConfig.NOTIFY_REVIEW_DELETED()
+    BotConfig.update(**{"notifications.review_deleted": not current})
+
+    status = "включены" if not current else "выключены"
+    await callback.answer(f"Уведомления об удалении отзыва {status}", show_alert=False)
 
     await _refresh_notifications_menu(callback)
 
@@ -1871,6 +1919,37 @@ async def handle_review_reply_button(callback: CallbackQuery, state: FSMContext)
     await state.set_state(ReviewReplyState.waiting_for_text)
     await callback.message.answer("💬 Отправьте текст ответа на отзыв или <code>-</code> для отмены.", parse_mode="HTML")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("review_delete:"))
+async def handle_review_delete_button(callback: CallbackQuery):
+    """Запрос подтверждения удаления ответа на отзыв."""
+    response_id = callback.data.split(":", 1)[1]
+    order_id = _extract_order_id_from_markup(callback.message.reply_markup)
+    if not order_id:
+        await callback.answer("❌ Не удалось определить заказ для удаления ответа", show_alert=True)
+        return
+
+    ORDER_ACTION_CONTEXT[_order_action_context_key(callback)] = {
+        "order_id": order_id,
+        "review_id": "",
+        "review_response_id": response_id,
+        "original_markup": callback.message.reply_markup,
+    }
+    confirm_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, удалить",
+                callback_data=f"review_delete_confirm:{response_id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Нет",
+                callback_data="refund_cancel"
+            )
+        ]
+    ])
+    await callback.message.edit_reply_markup(reply_markup=confirm_keyboard)
+    await callback.answer("⚠️ Подтвердите удаление ответа на отзыв", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("confirm:"))
@@ -2016,7 +2095,7 @@ async def process_review_reply_text(message: Message, state: FSMContext, **kwarg
         return
 
     try:
-        await starvell.create_review_response(
+        response_result = await starvell.create_review_response(
             review_id=context["review_id"],
             content=text,
             order_id=context["order_id"],
@@ -2025,24 +2104,19 @@ async def process_review_reply_text(message: Message, state: FSMContext, **kwarg
         await message.answer("✅ Ответ на отзыв отправлен.")
 
         try:
-            original_message = await message.bot.edit_message_reply_markup(
+            response_id = str(
+                (response_result.get("reviewResponse") or {}).get("id")
+                or response_result.get("id")
+                or ""
+            )
+
+            await message.bot.edit_message_reply_markup(
                 chat_id=context["chat_id"],
                 message_id=context["message_id"],
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=[
-                        [
-                            InlineKeyboardButton(
-                                text="💰 Вернуть деньги",
-                                callback_data=f"refund:{context['order_id']}",
-                            )
-                        ],
-                        [
-                            InlineKeyboardButton(
-                                text="🔗 Открыть заказ",
-                                url=f"https://starvell.com/order/{context['order_id']}",
-                            )
-                        ],
-                    ]
+                reply_markup=_build_review_reply_markup(
+                    order_id=context["order_id"],
+                    review_id=context["review_id"],
+                    response_id=response_id or None,
                 ),
             )
         except Exception:
@@ -2052,3 +2126,48 @@ async def process_review_reply_text(message: Message, state: FSMContext, **kwarg
     finally:
         REVIEW_REPLY_CONTEXT.pop(message.from_user.id, None)
         await state.clear()
+
+
+@router.callback_query(F.data.startswith("review_delete_confirm:"))
+async def handle_review_delete_confirm(callback: CallbackQuery, **kwargs):
+    """Подтверждение удаления ответа на отзыв."""
+    response_id = callback.data.split(":", 1)[1]
+    starvell = kwargs.get("starvell")
+    if not starvell:
+        await callback.answer("❌ Ошибка: сервис Starvell недоступен", show_alert=True)
+        return
+
+    context = ORDER_ACTION_CONTEXT.pop(_order_action_context_key(callback), {})
+    order_id = context.get("order_id") or _extract_order_id_from_markup(callback.message.reply_markup)
+    original_markup = context.get("original_markup")
+    if not order_id:
+        await callback.answer("❌ Не удалось определить заказ", show_alert=True)
+        return
+
+    try:
+        await callback.answer("⏳ Удаляю ответ на отзыв...", show_alert=False)
+        await starvell.delete_review_response(response_id, order_id)
+        review_id = context.get("review_id")
+        if not review_id:
+            try:
+                order_details = await starvell.get_order_details(order_id)
+                page_props = order_details.get("pageProps", {})
+                bff = page_props.get("bff") or {}
+                review = (
+                    page_props.get("review")
+                    or (page_props.get("order") or {}).get("review")
+                    or bff.get("review")
+                    or (bff.get("order") or {}).get("review")
+                    or {}
+                )
+                review_id = str(review.get("id") or "")
+            except Exception:
+                review_id = ""
+        await callback.message.edit_reply_markup(
+            reply_markup=_build_review_reply_markup(order_id=order_id, review_id=review_id or None),
+        )
+        await callback.answer("Ответ на отзыв удалён", show_alert=False)
+    except Exception as e:
+        if original_markup:
+            await callback.message.edit_reply_markup(reply_markup=original_markup)
+        await callback.answer(f"❌ Ошибка при удалении ответа: {e}", show_alert=True)

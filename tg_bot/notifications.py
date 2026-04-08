@@ -141,7 +141,7 @@ class NotificationManager:
             NotificationType.ORDER_CONFIRMED: BotConfig.NOTIFY_ORDER_CONFIRMED,
             NotificationType.ORDER_CANCELLED: BotConfig.NOTIFY_ORDER_CONFIRMED,
             NotificationType.REVIEW: BotConfig.NOTIFY_REVIEW,
-            NotificationType.REVIEW_REMOVED: BotConfig.NOTIFY_REVIEW,
+            NotificationType.REVIEW_REMOVED: BotConfig.NOTIFY_REVIEW_DELETED,
         }
         
         # Если есть соответствующая настройка в конфиге
@@ -532,10 +532,22 @@ class NotificationManager:
         )
 
     @staticmethod
-    def _build_review_keyboard(order_id: str, review_id: str | None = None, can_reply: bool = True) -> InlineKeyboardMarkup:
+    def _build_review_keyboard(
+        order_id: str,
+        review_id: str | None = None,
+        can_reply: bool = True,
+        review_response_id: str | None = None,
+    ) -> InlineKeyboardMarkup:
         rows: list[list[InlineKeyboardButton]] = []
         first_row: list[InlineKeyboardButton] = []
-        if review_id and can_reply and len(f"review_reply:{review_id}") <= 64:
+        if review_response_id and len(f"review_delete:{review_response_id}") <= 64:
+            first_row.append(
+                InlineKeyboardButton(
+                    text="🗑️ Удалить ответ",
+                    callback_data=f"review_delete:{review_response_id}",
+                )
+            )
+        elif review_id and can_reply and len(f"review_reply:{review_id}") <= 64:
             first_row.append(
                 InlineKeyboardButton(
                     text="💬 Ответить на отзыв",
@@ -628,6 +640,7 @@ class NotificationManager:
         comment: str,
         review_id: str | None = None,
         can_reply: bool = True,
+        review_response_id: str | None = None,
     ) -> None:
         try:
             rating_value = int(float(str(rating)))
@@ -648,7 +661,7 @@ class NotificationManager:
         await self.notify_all_admins(
             NotificationType.REVIEW,
             message,
-            keyboard=self._build_review_keyboard(order_id, review_id, can_reply),
+            keyboard=self._build_review_keyboard(order_id, review_id, can_reply, review_response_id),
             force=False,
         )
 
