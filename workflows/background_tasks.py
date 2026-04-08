@@ -267,23 +267,30 @@ class BackgroundTasks:
         seller_confirm_statuses = {"WAITING_CONFIRMATION", "PENDING_CONFIRMATION"}
 
         if review or "REVIEW" in notification_type:
-            if not review and order_id:
+            if order_id:
                 try:
                     order_details = await self.starvell.get_order_details(order_id)
                     page_props = order_details.get("pageProps", {})
                     detailed_order = page_props.get("order") or page_props.get("bff", {}).get("order") or {}
-                    review = detailed_order.get("review") or {}
+                    review = detailed_order.get("review") or review or {}
                 except Exception as e:
                     logger.debug("Не удалось получить детали отзыва по заказу %s: %s", order_id, e)
-            await self.notifier.notify_order_review(
-                order_id=order_id,
-                short_id=short_id,
-                buyer=buyer_name,
-                rating=str(review.get("rating", "N/A")),
-                comment=str(review.get("content") or review.get("comment") or review.get("text") or ""),
-                review_id=str(review.get("id") or ""),
-                can_reply=not bool(review.get("reviewResponse")),
-            )
+            if review:
+                await self.notifier.notify_order_review(
+                    order_id=order_id,
+                    short_id=short_id,
+                    buyer=buyer_name,
+                    rating=str(review.get("rating", "N/A")),
+                    comment=str(review.get("content") or review.get("comment") or review.get("text") or ""),
+                    review_id=str(review.get("id") or ""),
+                    can_reply=not bool(review.get("reviewResponse")),
+                )
+            else:
+                await self.notifier.notify_order_review_removed(
+                    order_id=order_id,
+                    short_id=short_id,
+                    buyer=buyer_name,
+                )
             return
 
         if (

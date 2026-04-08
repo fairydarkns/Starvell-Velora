@@ -18,9 +18,11 @@ class NotificationType:
     NEW_MESSAGE = "new_message"
     SUPPORT_MESSAGE = "support_message"
     NEW_ORDER = "new_order"
+    ORDER_READY = "order_ready"
     ORDER_CONFIRMED = "order_confirmed"
     ORDER_CANCELLED = "order_cancelled"
     REVIEW = "review"
+    REVIEW_REMOVED = "review_removed"
     LOT_DEACTIVATED = "lot_deactivated"
     LOT_RESTORED = "lot_restored"
     LOT_BUMPED = "lot_bumped"
@@ -42,9 +44,11 @@ class NotificationManager:
         NotificationType.NEW_MESSAGE: "💬",
         NotificationType.SUPPORT_MESSAGE: "🛡️",
         NotificationType.NEW_ORDER: "📦",
+        NotificationType.ORDER_READY: "⏳",
         NotificationType.ORDER_CONFIRMED: "✅",
         NotificationType.ORDER_CANCELLED: "❌",
         NotificationType.REVIEW: "⭐",
+        NotificationType.REVIEW_REMOVED: "🗑️",
         NotificationType.LOT_DEACTIVATED: "🚫",
         NotificationType.LOT_RESTORED: "🔄",
         NotificationType.LOT_BUMPED: "⬆️",
@@ -63,9 +67,11 @@ class NotificationManager:
         NotificationType.NEW_MESSAGE: "Новое сообщение",
         NotificationType.SUPPORT_MESSAGE: "Сообщение от поддержки",
         NotificationType.NEW_ORDER: "Новый заказ",
-        NotificationType.ORDER_CONFIRMED: "Заказ подтверждён",
+        NotificationType.ORDER_READY: "Заказ готов",
+        NotificationType.ORDER_CONFIRMED: "Заказ подтверждён покупателем",
         NotificationType.ORDER_CANCELLED: "Деньги возвращены",
         NotificationType.REVIEW: "Новый отзыв",
+        NotificationType.REVIEW_REMOVED: "Отзыв удалён",
         NotificationType.LOT_DEACTIVATED: "Лот деактивирован",
         NotificationType.LOT_RESTORED: "Лот восстановлен",
         NotificationType.LOT_BUMPED: "Лот поднят",
@@ -131,10 +137,12 @@ class NotificationManager:
         NotificationType.LOT_DEACTIVATED: BotConfig.NOTIFY_LOT_DEACTIVATE,
         NotificationType.BOT_STARTED: BotConfig.NOTIFY_BOT_START,
         NotificationType.BOT_STOPPED: BotConfig.NOTIFY_BOT_STOP,
-        NotificationType.ORDER_CONFIRMED: BotConfig.NOTIFY_ORDER_CONFIRMED,
-        NotificationType.ORDER_CANCELLED: BotConfig.NOTIFY_ORDER_CONFIRMED,
-        NotificationType.REVIEW: BotConfig.NOTIFY_REVIEW,
-    }
+            NotificationType.ORDER_READY: BotConfig.NOTIFY_ORDER_CONFIRMED,
+            NotificationType.ORDER_CONFIRMED: BotConfig.NOTIFY_ORDER_CONFIRMED,
+            NotificationType.ORDER_CANCELLED: BotConfig.NOTIFY_ORDER_CONFIRMED,
+            NotificationType.REVIEW: BotConfig.NOTIFY_REVIEW,
+            NotificationType.REVIEW_REMOVED: BotConfig.NOTIFY_REVIEW,
+        }
         
         # Если есть соответствующая настройка в конфиге
         if notif_type in config_map:
@@ -564,10 +572,10 @@ class NotificationManager:
             f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
             f"👤 <b>Покупатель:</b> {buyer}\n"
             f"🏪 <b>Продавец:</b> {seller}\n\n"
-            "Продавец отметил заказ выполненным."
+            "Продавец отметил заказ выполненным. Ожидается подтверждение покупателя."
         )
         await self.notify_all_admins(
-            NotificationType.ORDER_CONFIRMED,
+            NotificationType.ORDER_READY,
             message,
             keyboard=self._build_order_link_keyboard(order_id),
             force=False,
@@ -641,6 +649,24 @@ class NotificationManager:
             NotificationType.REVIEW,
             message,
             keyboard=self._build_review_keyboard(order_id, review_id, can_reply),
+            force=False,
+        )
+
+    async def notify_order_review_removed(
+        self,
+        order_id: str,
+        short_id: str,
+        buyer: str,
+    ) -> None:
+        message = (
+            f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
+            f"👤 <b>Покупатель:</b> {buyer}\n\n"
+            "Покупатель удалил отзыв по заказу."
+        )
+        await self.notify_all_admins(
+            NotificationType.REVIEW_REMOVED,
+            message,
+            keyboard=self._build_order_link_keyboard(order_id),
             force=False,
         )
 

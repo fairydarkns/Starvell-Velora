@@ -194,7 +194,11 @@ def _order_action_context_key(callback: CallbackQuery) -> tuple[int, int]:
     return callback.message.chat.id, callback.message.message_id
 
 
-def _strip_order_action_buttons(reply_markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup | None:
+def _strip_order_action_buttons(
+    reply_markup: InlineKeyboardMarkup | None,
+    *,
+    keep_refund: bool = False,
+) -> InlineKeyboardMarkup | None:
     if not reply_markup:
         return None
 
@@ -203,8 +207,11 @@ def _strip_order_action_buttons(reply_markup: InlineKeyboardMarkup | None) -> In
         filtered_row = []
         for button in row:
             callback_data = getattr(button, "callback_data", None)
-            if callback_data and (callback_data.startswith("complete:") or callback_data.startswith("refund:")):
-                continue
+            if callback_data:
+                if callback_data.startswith("complete:"):
+                    continue
+                if callback_data.startswith("refund:") and not keep_refund:
+                    continue
             filtered_row.append(button)
         if filtered_row:
             rows.append(filtered_row)
@@ -1933,36 +1940,13 @@ async def handle_mark_seller_completed(callback: CallbackQuery, **kwargs):
     try:
         await callback.answer("⏳ Отмечаю заказ выполненным...", show_alert=False)
         await starvell.mark_seller_completed(order_id)
-        message_text = callback.message.text or callback.message.html_text or ""
-        short_id = _build_short_order_id(order_id, message_text)
-        buyer_name = _extract_order_card_field(message_text, "👤 Покупатель: ") or "Неизвестно"
-        seller_name = "Неизвестно"
-        try:
-            user_info = starvell.last_user_info or await starvell.get_user_info()
-            seller_name = (
-                (user_info.get("user") or {}).get("username")
-                or (user_info.get("user") or {}).get("nickname")
-                or (user_info.get("user") or {}).get("name")
-                or "Неизвестно"
-            )
-        except Exception:
-            pass
         context = ORDER_ACTION_CONTEXT.pop(_order_action_context_key(callback), {})
         original_markup = context.get("original_markup")
-        reduced_markup = _strip_order_action_buttons(original_markup)
+        reduced_markup = _strip_order_action_buttons(original_markup, keep_refund=True)
         await callback.message.edit_text(
             callback.message.text + "\n\n✅ <b>Заказ отмечен выполненным.</b>",
             reply_markup=reduced_markup
         )
-        from tg_bot.notifications import get_notification_manager
-        notifier = get_notification_manager()
-        if notifier:
-            await notifier.notify_order_marked_completed(
-                order_id=order_id,
-                short_id=short_id,
-                buyer=buyer_name,
-                seller=seller_name,
-            )
     except Exception as e:
         await callback.answer(f"❌ Ошибка при подтверждении выполнения: {str(e)}", show_alert=True)
 
