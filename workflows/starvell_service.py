@@ -3,12 +3,15 @@
 """
 
 import asyncio
+import logging
 from typing import Optional, List, Dict, Any
 from StarvellAPI.gateway_client import StarAPI
 from StarvellAPI.socket_client import StarSocketClient
 from StarvellAPI.api_exceptions import StarAPIError
 from support.runtime_config import BotConfig
 from support.runtime_storage import Database
+
+logger = logging.getLogger(__name__)
 
 
 class StarvellService:
@@ -61,11 +64,27 @@ class StarvellService:
     def realtime_enabled(self) -> bool:
         return self.socket is not None
 
+    @property
+    def realtime_connected(self) -> bool:
+        return bool(self.socket and self.socket.connected)
+
     async def _enqueue_realtime_event(self, event: Dict[str, Any]) -> None:
         await self._realtime_queue.put(event)
 
     async def wait_realtime_event(self) -> Dict[str, Any]:
         return await self._realtime_queue.get()
+
+    async def ensure_realtime_connected(self) -> bool:
+        if not self.socket:
+            return False
+        if self.socket.connected:
+            return True
+        try:
+            await self.socket.reconnect()
+            return self.socket.connected
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Не удалось переподключить realtime socket Starvell: %s", exc)
+            return False
     
     async def _notify_session_error(self):
         """Отправить уведомление об ошибке сессии (только один раз)"""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from typing import Any, Awaitable, Callable, Optional
 
 import socketio
@@ -38,14 +39,26 @@ class StarSocketClient:
         self.on_event = on_event
         self.client = socketio.AsyncClient(
             reconnection=True,
+            reconnection_attempts=0,
+            reconnection_delay=2,
+            reconnection_delay_max=15,
+            randomization_factor=0.2,
             logger=False,
             engineio_logger=False,
         )
+        self._last_activity_ts = time.monotonic()
         self._register_handlers()
 
     @property
     def connected(self) -> bool:
         return self.client.connected
+
+    @property
+    def last_activity_ts(self) -> float:
+        return self._last_activity_ts
+
+    def mark_activity(self) -> None:
+        self._last_activity_ts = time.monotonic()
 
     def _register_handlers(self) -> None:
         for namespace in self.NAMESPACES:
@@ -59,18 +72,21 @@ class StarSocketClient:
 
     def _make_connect_handler(self, namespace: str):
         async def handler():
+            self.mark_activity()
             logger.info("Socket namespace подключен: %s", namespace)
 
         return handler
 
     def _make_disconnect_handler(self, namespace: str):
         async def handler():
+            self.mark_activity()
             logger.warning("Socket namespace отключен: %s", namespace)
 
         return handler
 
     def _make_event_handler(self, namespace: str, event_name: str):
         async def handler(data: Any):
+            self.mark_activity()
             logger.debug("Socket событие %s [%s]", event_name, namespace)
             await self._dispatch_event(
                 {
@@ -109,10 +125,21 @@ class StarSocketClient:
             namespaces=list(self.NAMESPACES),
             wait_timeout=self.config.timeout,
         )
+        self.mark_activity()
         logger.info("Socket.IO клиент Starvell подключен")
 
     async def stop(self) -> None:
         if not self.connected:
             return
         await self.client.disconnect()
+        self.mark_activity()
         logger.info("Socket.IO клиент Starvell остановлен")
+
+    async def reconnect(self) -> None:
+        logger.warning("Переподключаю Socket.IO клиент Starvell")
+        try:
+            if self.connected:
+                await self.client.disconnect()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Ошибка при отключении Socket.IO перед reconnect: %s", exc)
+        await self.start()

@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -17,6 +18,9 @@ from workflows.autoticket import get_autoticket_service
 logger = logging.getLogger(__name__)
 
 logging.getLogger('apscheduler').setLevel(logging.ERROR)
+
+REALTIME_IDLE_TIMEOUT = 90
+REALTIME_STALE_TIMEOUT = 180
 
 
 class BackgroundTasks:
@@ -131,13 +135,37 @@ class BackgroundTasks:
         """Обработка realtime-событий из websocket."""
         while True:
             try:
-                event = await self.starvell.wait_realtime_event()
+                event = await asyncio.wait_for(
+                    self.starvell.wait_realtime_event(),
+                    timeout=REALTIME_IDLE_TIMEOUT,
+                )
                 await self._handle_realtime_event(event)
+            except asyncio.TimeoutError:
+                await self._check_realtime_health()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Ошибка в realtime-цикле: {e}", exc_info=True)
                 await asyncio.sleep(1)
+
+    async def _check_realtime_health(self):
+        socket = self.starvell.socket
+        if not socket:
+            return
+
+        if not socket.connected:
+            logger.warning("Realtime socket Starvell отключен, пытаюсь переподключиться")
+            await self.starvell.ensure_realtime_connected()
+            return
+
+        now = time.monotonic()
+        idle_for = now - socket.last_activity_ts
+        if idle_for >= REALTIME_STALE_TIMEOUT:
+            logger.warning(
+                "Realtime socket Starvell выглядит зависшим (%.1f сек без активности), переподключаю",
+                idle_for,
+            )
+            await self.starvell.ensure_realtime_connected()
 
     async def _handle_realtime_event(self, event: dict):
         event_name = event.get("event")
