@@ -174,6 +174,8 @@ class BackgroundTasks:
                 order = dict(message.get("order") or {})
                 order_id = str(metadata.get("orderId") or order.get("id") or "")
                 if not order_id:
+                    if BotConfig.AUTO_READ_ENABLED():
+                        await self.starvell.mark_chat_as_read(chat_id)
                     return
                 order["id"] = order_id
                 order["buyerId"] = message.get("buyerId") or (message.get("buyer") or {}).get("id")
@@ -184,6 +186,8 @@ class BackgroundTasks:
                 order["_notification_type"] = metadata.get("notificationType")
                 order["_message_id"] = message.get("id")
                 await self._process_order(order)
+            if BotConfig.AUTO_READ_ENABLED():
+                await self.starvell.mark_chat_as_read(chat_id)
             return
 
         await self._process_message(

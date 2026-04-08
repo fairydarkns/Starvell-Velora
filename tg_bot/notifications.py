@@ -415,6 +415,14 @@ class NotificationManager:
         
         # Создаём кнопки
         buttons = []
+
+        if order_id and len(f"complete:{order_id}") <= 64:
+            buttons.append([
+                InlineKeyboardButton(
+                    text="✅ Подтвердить выполнение",
+                    callback_data=f"complete:{order_id}"
+                )
+            ])
         
         # Получаем chat_id покупателя из order_data
         chat_id = None

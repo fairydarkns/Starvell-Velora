@@ -1813,6 +1813,27 @@ async def handle_confirm_order(callback: CallbackQuery, **kwargs):
         await callback.answer(f"❌ Ошибка при подтверждении: {str(e)}", show_alert=True)
 
 
+@router.callback_query(F.data.startswith("complete:"))
+async def handle_mark_seller_completed(callback: CallbackQuery, **kwargs):
+    """Обработка ручной отметки заказа выполненным."""
+    order_id = callback.data.split(":", 1)[1]
+    starvell = kwargs.get('starvell')
+
+    if not starvell:
+        await callback.answer("❌ Ошибка: сервис Starvell недоступен", show_alert=True)
+        return
+
+    try:
+        await callback.answer("⏳ Отмечаю заказ выполненным...", show_alert=False)
+        await starvell.mark_seller_completed(order_id)
+        await callback.message.edit_text(
+            callback.message.text + "\n\n✅ <b>Заказ отмечен выполненным.</b>",
+            reply_markup=None
+        )
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка при подтверждении выполнения: {str(e)}", show_alert=True)
+
+
 @router.callback_query(F.data.startswith("refund_confirm:"))
 async def handle_refund_confirm(callback: CallbackQuery, **kwargs):
     """Подтверждение возврата денег"""
