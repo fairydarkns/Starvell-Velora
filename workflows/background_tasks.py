@@ -535,6 +535,17 @@ class BackgroundTasks:
         if last_known and last_known.get("status") == status:
             return
 
+        if order.get("basePriceRub") is None and order.get("basePrice") is None:
+            try:
+                order_details = await self.starvell.get_order_details(order_id)
+                full_order = self.starvell.extract_order_from_details(order_details)
+                if full_order:
+                    merged_order = dict(full_order)
+                    merged_order.update({k: v for k, v in order.items() if v not in (None, "", [], {})})
+                    order = merged_order
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Не удалось обогатить новый заказ %s полными данными: %s", order_id, exc)
+
         short_id = order.get("shortId", "")
         if not short_id:
             clean_id = order_id.replace("-", "")

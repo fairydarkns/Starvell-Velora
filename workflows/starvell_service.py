@@ -66,6 +66,21 @@ class StarvellService:
         return {}
 
     @staticmethod
+    def extract_order_from_details(order_details: Dict[str, Any]) -> Dict[str, Any]:
+        """Достать полную структуру заказа из Next Data."""
+        page_props = (order_details or {}).get("pageProps", {})
+        bff = page_props.get("bff") or {}
+        candidates = (
+            page_props.get("order"),
+            bff.get("order"),
+            bff.get("orderDetails"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate:
+                return candidate
+        return {}
+
+    @staticmethod
     def extract_order_income_rub(order: Dict[str, Any]) -> float:
         """Доход продавца по заказу: строго из basePrice."""
         if not isinstance(order, dict):
