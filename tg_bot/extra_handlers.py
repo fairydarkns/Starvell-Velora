@@ -23,6 +23,10 @@ from support.runtime_config import BotConfig, get_config_manager
 router = Router()
 
 
+def _is_cancel_text(text: str | None) -> bool:
+    return (text or "").strip() in {"-", "/cancel"}
+
+
 class EditTextStates(StatesGroup):
     """Состояния для редактирования текстов"""
     waiting_for_order_confirm_text = State()
@@ -77,13 +81,19 @@ async def callback_edit_order_confirm_text(callback: CallbackQuery, state: FSMCo
     await callback.message.edit_text(
         "✏️ <b>Изменение текста ответа на подтверждение заказа</b>\n\n"
         "Отправьте новый текст сообщения, которое будет отправляться покупателю "
-        "после завершения заказа."
+        "после завершения заказа.\n\n"
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>."
     )
 
 
 @router.message(EditTextStates.waiting_for_order_confirm_text)
 async def process_order_confirm_text(message: Message, state: FSMContext):
     """Обработка нового текста ответа на подтверждение"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     text = message.text.strip()
     
     if not text or len(text) > 4096:
@@ -144,13 +154,19 @@ async def callback_edit_review_text(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "✏️ <b>Изменение текста ответа на отзыв</b>\n\n"
         "Отправьте новый текст сообщения, которое будет отправляться "
-        "в ответ на отзыв."
+        "в ответ на отзыв.\n\n"
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>."
     )
 
 
 @router.message(EditTextStates.waiting_for_review_text)
 async def process_review_text(message: Message, state: FSMContext):
     """Обработка нового текста ответа на отзыв"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     text = message.text.strip()
     
     if not text or len(text) > 4096:
@@ -225,13 +241,19 @@ async def callback_config_upload(callback: CallbackQuery, state: FSMContext):
         "📤 <b>Загрузка конфига</b>\n\n"
         "Отправьте файл <code>_main.cfg</code> в чат.\n\n"
         "⚠️ <b>Внимание!</b> Текущий конфиг будет удалён и заменён новым. "
-        "Бот будет перезапущен."
+        "Бот будет перезапущен.\n\n"
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>."
     )
 
 
 @router.message(EditTextStates.waiting_for_config)
 async def process_config_upload(message: Message, state: FSMContext, bot):
     """Обработка загрузки конфига"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     if not message.document:
         await message.answer(
             "❌ Пожалуйста, отправьте файл конфигурации."

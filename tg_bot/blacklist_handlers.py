@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
+def _is_cancel_text(text: str | None) -> bool:
+    return (text or "").strip() in {"-", "/cancel"}
+
+
 class BlacklistStates(StatesGroup):
     """Состояния для чёрного списка"""
     waiting_username = State()
@@ -83,7 +87,7 @@ async def add_to_blacklist(callback: CallbackQuery, state: FSMContext):
 @router.message(BlacklistStates.waiting_username)
 async def process_blacklist_username(message: Message, state: FSMContext):
     """Обработать добавление в ЧС"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await state.clear()
         await message.answer("❌ Отменено")
         return
@@ -235,4 +239,3 @@ async def delete_from_blacklist(callback: CallbackQuery, **kwargs):
     except Exception as e:
         logger.error(f"Ошибка удаления из ЧС: {e}", exc_info=True)
         await callback.answer("❌ Ошибка", show_alert=True)
-

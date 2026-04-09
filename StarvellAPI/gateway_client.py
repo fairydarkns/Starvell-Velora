@@ -45,6 +45,23 @@ def _normalize_order_money(order: Dict[str, Any]) -> Dict[str, Any]:
     )
     return normalized
 
+
+def _normalize_profile_user(user_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Нормализовать профиль пользователя из Next Data."""
+    if not isinstance(user_data, dict):
+        return {}
+
+    normalized = dict(user_data)
+    normalized["nickname"] = (
+        normalized.get("nickname")
+        or normalized.get("username")
+        or normalized.get("name")
+    )
+    normalized["verified"] = normalized.get("kycStatus") == "VERIFIED"
+    normalized["rating"] = float(normalized.get("rating", 0) or 0)
+    normalized["reviewsCount"] = int(normalized.get("reviewsCount", 0) or 0)
+    return normalized
+
 class StarAPI:
     """
     Главный класс для работы с Starvell API
@@ -138,6 +155,36 @@ class StarAPI:
         raise RuntimeError("Не удалось получить Next.js данные")
         
     # ==================== Аутентификация ====================
+
+    async def _get_user_profile_page(self, user_id: int | str) -> Dict[str, Any]:
+        return await self._get_next_data(
+            f"users/{user_id}.json",
+            params=f"?user_id={user_id}",
+        )
+
+    @staticmethod
+    def _extract_user_profile_user(page_props: Dict[str, Any]) -> Dict[str, Any]:
+        bff = page_props.get("bff") or {}
+        for candidate in (
+            bff.get("user"),
+            page_props.get("user"),
+            page_props.get("foreignProfileUser"),
+        ):
+            if isinstance(candidate, dict) and candidate:
+                return _normalize_profile_user(candidate)
+        return {}
+
+    @staticmethod
+    def _extract_user_profile_categories(page_props: Dict[str, Any]) -> tuple[list[Dict[str, Any]], str]:
+        bff = page_props.get("bff") or {}
+        for key, source in (
+            ("pageProps.bff.userProfileOffers", bff.get("userProfileOffers")),
+            ("pageProps.userProfileOffers", page_props.get("userProfileOffers")),
+            ("pageProps.categoriesWithOffers", page_props.get("categoriesWithOffers")),
+        ):
+            if isinstance(source, list):
+                return source, key
+        return [], "unknown"
     
     async def get_user_info(self) -> Dict[str, Any]:
         """
@@ -199,21 +246,11 @@ class StarAPI:
             dict: Данные профиля (nickname, name, id и др.) или None если не найден
         """
         try:
-            # Используем URL вида https://starvell.com/_next/data/{build_id}/user/{user_id}.json
-            data = await self._get_next_data(f"user/{user_id}.json")
+            data = await self._get_user_profile_page(user_id)
             page_props = data.get("pageProps", {})
-            
-            # Извлекаем данные пользователя
-            user_data = page_props.get("user")
+            user_data = self._extract_user_profile_user(page_props)
             if user_data:
-                return {
-                    "id": user_data.get("id"),
-                    "nickname": user_data.get("nickname") or user_data.get("name"),
-                    "name": user_data.get("name"),
-                    "username": user_data.get("username"),
-                    "avatar": user_data.get("avatar"),
-                }
-            
+                return user_data
             return None
         except Exception as e:
             logger.debug(f"Не удалось получить профиль пользователя {user_id}: {e}")
@@ -646,29 +683,14 @@ class StarAPI:
         """
         logger.debug("🔍 Запрашиваю список лотов пользователя %s через Next Data...", user_id)
 
-        data = await self._get_next_data(
-            f"users/{user_id}.json",
-            params=f"?user_id={user_id}",
-        )
-
+        data = await self._get_user_profile_page(user_id)
         page_props = data.get("pageProps", {})
-        bff = page_props.get("bff") or {}
+        categories, source_key = self._extract_user_profile_categories(page_props)
 
-        categories = None
-        source_key = "unknown"
-        for key, source in (
-            ("pageProps.bff.userProfileOffers", bff.get("userProfileOffers")),
-            ("pageProps.userProfileOffers", page_props.get("userProfileOffers")),
-            ("pageProps.categoriesWithOffers", page_props.get("categoriesWithOffers")),
-        ):
-            if isinstance(source, list):
-                categories = source
-                source_key = key
-                break
-
-        if not isinstance(categories, list):
+        if not categories:
             logger.warning("⚠️ Не удалось найти userProfileOffers в Next Data для пользователя %s", user_id)
             logger.debug("📊 Ключи pageProps: %s", list(page_props.keys()))
+            bff = page_props.get("bff") or {}
             if isinstance(bff, dict):
                 logger.debug("📊 Ключи pageProps.bff: %s", list(bff.keys()))
             return []
@@ -719,42 +741,15 @@ class StarAPI:
         Returns:
             dict: Словарь {game_id: [category_ids]} - все категории пользователя по играм
         """
-        logger.debug(f"🔍 Запрашиваю категории пользователя {user_id}...")
-        
-        html = await self.session.get_text(
-            f"{self.config.BASE_URL}/users/{user_id}",
-            headers={
-                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "cache-control": "max-age=0",
-                "upgrade-insecure-requests": "1",
-            },
-        )
-        
-        # Парсим __NEXT_DATA__
-        import json
-        
-        marker = '<script id="__NEXT_DATA__" type="application/json">'
-        idx = html.find(marker)
-        if idx == -1:
-            logger.warning("⚠️ Не найден маркер __NEXT_DATA__ на странице")
-            return {}
-            
-        json_start = html.find('{', idx)
-        json_end = html.find('</script>', json_start)
-        if json_start == -1 or json_end == -1:
-            logger.warning("⚠️ Ошибка парсинга JSON")
-            return {}
-            
-        data = json.loads(html[json_start:json_end])
-        page_props = data.get("props", {}).get("pageProps", {})
-        
-        logger.debug(f"📊 Ключи pageProps: {list(page_props.keys())}")
-        
-        # Правильный путь - userProfileOffers, а не categoriesWithOffers!
-        categories = page_props.get("userProfileOffers", [])
-        
-        logger.debug(f"📊 Сырые userProfileOffers: {categories[:2] if categories else 'пусто'}")
-        logger.debug(f"📊 Всего userProfileOffers: {len(categories)}")
+        logger.debug("🔍 Запрашиваю категории пользователя %s через Next Data...", user_id)
+
+        data = await self._get_user_profile_page(user_id)
+        page_props = data.get("pageProps", {})
+        categories, source_key = self._extract_user_profile_categories(page_props)
+
+        logger.debug("📊 Источник категорий: %s", source_key)
+        logger.debug("📊 Всего категорий профиля: %s", len(categories))
+        logger.debug("📊 Ключи pageProps: %s", list(page_props.keys()))
         
         # Группируем категории по играм
         game_categories = {}

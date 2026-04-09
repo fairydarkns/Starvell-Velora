@@ -245,22 +245,6 @@ class BackgroundTasks:
             return f"ID{buyer_id}"
         return "Неизвестно"
 
-    @staticmethod
-    def _extract_review_from_order_details(order_details: dict) -> dict:
-        page_props = order_details.get("pageProps", {})
-        bff = page_props.get("bff") or {}
-        candidates = (
-            page_props.get("review"),
-            (page_props.get("order") or {}).get("review"),
-            bff.get("review"),
-            (bff.get("order") or {}).get("review"),
-            (bff.get("orderDetails") or {}).get("review"),
-        )
-        for candidate in candidates:
-            if isinstance(candidate, dict) and candidate:
-                return candidate
-        return {}
-
     async def _handle_socket_notification(self, message: dict):
         metadata = message.get("metadata") or {}
         notification_type = str(metadata.get("notificationType") or "").upper()
@@ -289,7 +273,6 @@ class BackgroundTasks:
 
         await self._ensure_current_user()
 
-        order_status = str(order.get("status") or "").upper()
         short_id = self._build_short_order_id(order_id, order)
         buyer_name = self._resolve_buyer_name(order, message)
         buyer_id = str(message.get("buyerId") or order.get("buyerId") or (message.get("buyer") or {}).get("id") or "")
@@ -299,10 +282,8 @@ class BackgroundTasks:
         review = order.get("review") or {}
 
         refund_types = {"ORDER_REFUND", "ORDER_REFUNDED", "ORDER_CANCELLED", "ORDER_CANCELED"}
-        refund_statuses = {"REFUNDED", "CANCELLED", "CANCELED"}
         buyer_confirm_types = {"ORDER_COMPLETED", "ORDER_CONFIRMED"}
         seller_confirm_types = {"ORDER_SELLER_COMPLETED", "ORDER_MARKED_COMPLETED"}
-        seller_confirm_statuses = {"WAITING_CONFIRMATION", "PENDING_CONFIRMATION"}
         review_created_types = {"REVIEW_CREATED"}
         review_deleted_types = {"REVIEW_DELETED"}
 
@@ -311,7 +292,7 @@ class BackgroundTasks:
             if order_id:
                 try:
                     order_details = await self.starvell.get_order_details(order_id)
-                    review = self._extract_review_from_order_details(order_details) or review or {}
+                    review = self.starvell.extract_review_from_order_details(order_details) or review or {}
                 except Exception as e:
                     logger.debug("Не удалось получить детали отзыва по заказу %s: %s", order_id, e)
             if review:
@@ -343,7 +324,7 @@ class BackgroundTasks:
             or "REFUND" in notification_type
             or "CANCEL" in notification_type
             or order.get("refundedAt")
-            or order_status in refund_statuses
+            or self.starvell.is_cancelled_order(order)
         ):
             await self.notifier.notify_order_refunded(
                 order_id=order_id,
@@ -355,7 +336,7 @@ class BackgroundTasks:
 
         if (
             notification_type in seller_confirm_types
-            or order_status in seller_confirm_statuses
+            or self.starvell.is_waiting_buyer_confirmation(order)
         ):
             await self.notifier.notify_order_marked_completed(
                 order_id=order_id,
@@ -367,7 +348,7 @@ class BackgroundTasks:
 
         if (
             notification_type in buyer_confirm_types
-            or order_status == "COMPLETED"
+            or self.starvell.is_completed_order(order)
         ):
             await self.notifier.notify_order_buyer_confirmed(
                 order_id=order_id,

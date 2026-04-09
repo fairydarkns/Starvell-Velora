@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
+def _is_cancel_text(text: str | None) -> bool:
+    return (text or "").strip() in {"-", "/cancel"}
+
+
 class AutoDeliveryStates(StatesGroup):
     """Состояния для автовыдачи"""
     waiting_lot_name = State()
@@ -70,7 +74,7 @@ async def add_lot_manual(callback: CallbackQuery, state: FSMContext):
 @router.message(AutoDeliveryStates.waiting_lot_name)
 async def process_lot_name(message: Message, state: FSMContext, auto_delivery, **kwargs):
     """Обработать название лота"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await state.clear()
         await message.answer("❌ Отменено")
         return
@@ -245,7 +249,7 @@ async def start_edit_text(callback: CallbackQuery, state: FSMContext):
 @router.message(AutoDeliveryStates.waiting_delivery_text)
 async def process_delivery_text(message: Message, state: FSMContext, auto_delivery, **kwargs):
     """Обработать новый текст выдачи"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await state.clear()
         await message.answer("❌ Отменено")
         return
@@ -319,7 +323,7 @@ async def start_link_file(callback: CallbackQuery, state: FSMContext):
 @router.message(AutoDeliveryStates.waiting_products_file)
 async def process_products_file(message: Message, state: FSMContext, auto_delivery, **kwargs):
     """Обработать привязку файла"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await state.clear()
         await message.answer("❌ Отменено")
         return
@@ -413,4 +417,3 @@ async def test_delivery(callback: CallbackQuery, auto_delivery, **kwargs):
     except Exception as e:
         logger.error(f"Ошибка создания тестового ключа: {e}", exc_info=True)
         await callback.answer("❌ Ошибка", show_alert=True)
-

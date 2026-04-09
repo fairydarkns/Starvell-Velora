@@ -875,7 +875,11 @@ def get_template_edit_menu(template_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
-def get_select_template_menu(chat_id: str, templates: list = None) -> InlineKeyboardMarkup:
+def get_select_template_menu(
+    chat_id: str,
+    templates: list = None,
+    back_callback: str | None = None,
+) -> InlineKeyboardMarkup:
     """
     Меню выбора заготовки для отправки
     
@@ -917,6 +921,14 @@ def get_select_template_menu(chat_id: str, templates: list = None) -> InlineKeyb
             InlineKeyboardButton(
                 text="➕ Добавить быстрый ответ",
                 callback_data=CBT.ADD_TEMPLATE
+            )
+        ])
+
+    if back_callback:
+        keyboard.append([
+            InlineKeyboardButton(
+                text="🔙 Назад",
+                callback_data=back_callback
             )
         ])
     

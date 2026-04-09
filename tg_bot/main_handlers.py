@@ -62,6 +62,10 @@ def _safe_float(val, default=0.0):
         return default
 
 
+def _is_cancel_text(text: str | None) -> bool:
+    return (text or "").strip() in {"-", "/cancel"}
+
+
 def _format_starvell_datetime(raw_value: str) -> str:
     if not raw_value:
         return "Неизвестно"
@@ -103,22 +107,6 @@ def _order_income_rub(order: dict) -> float:
 
 def _format_verification_status(user: dict) -> str:
     return "✅ Верифицирован" if user.get("kycStatus") == "VERIFIED" else "❌ Не верифицирован"
-
-
-def _normalized_order_status(order: dict) -> str:
-    return str(order.get("status", "")).upper()
-
-
-def _is_completed_order(order: dict) -> bool:
-    return _normalized_order_status(order) == "COMPLETED"
-
-
-def _is_cancelled_order(order: dict) -> bool:
-    return _normalized_order_status(order) in {"REFUND", "REFUNDED", "CANCELLED", "CANCELED"}
-
-
-def _is_active_order(order: dict) -> bool:
-    return _normalized_order_status(order) in {"CREATED", "PRE_CREATED"}
 
 
 def _parse_starvell_datetime(raw_value: str):
@@ -545,6 +533,11 @@ async def process_session_cookie_input(message: Message, state: FSMContext, star
         await state.clear()
         return
 
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     new_cookie = (message.text or "").strip()
     if not new_cookie:
         await message.answer("❌ Пустой ключ. Отправьте /session_cookie и попробуйте снова.")
@@ -662,15 +655,15 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         
         # Анализируем статистику по явным статусам Starvell.
         total_orders = len(orders)
-        completed_orders = sum(1 for order in orders if _is_completed_order(order))
-        cancelled_orders = sum(1 for order in orders if _is_cancelled_order(order))
-        active_orders = sum(1 for order in orders if _is_active_order(order))
+        completed_orders = sum(1 for order in orders if starvell.is_completed_order(order))
+        cancelled_orders = sum(1 for order in orders if starvell.is_cancelled_order(order))
+        active_orders = sum(1 for order in orders if starvell.is_active_order(order))
         
         # Считаем доход: Starvell отдает суммы заказов в копейках.
         total_income = sum(
             _order_income_rub(order)
             for order in orders
-            if _is_completed_order(order)
+            if starvell.is_completed_order(order)
         )
         
         # Считаем среднюю оценку
@@ -692,7 +685,7 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         income_month = 0
         
         for order in orders:
-            if not _is_completed_order(order):
+            if not starvell.is_completed_order(order):
                 continue
                 
             created_at = order.get("createdAt")
@@ -778,7 +771,7 @@ async def callback_profile_back(callback: CallbackQuery, starvell, **kwargs):
     # Получаем статистику
     orders = await starvell.get_orders()
     total_orders = len(orders)
-    active_orders = sum(1 for order in orders if _is_active_order(order))
+    active_orders = sum(1 for order in orders if starvell.is_active_order(order))
     
     # Статистика по отзывам
     reviews = [o.get("review") for o in orders if o.get("review")]
@@ -964,6 +957,11 @@ async def process_lot_test_lot_id(message: Message, state: FSMContext, starvell,
         await state.clear()
         return
 
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     lot_id = (message.text or "").strip()
     if not lot_id.isdigit():
         await message.answer("❌ ID лота должен быть числом. Попробуйте ещё раз.")
@@ -975,7 +973,7 @@ async def process_lot_test_lot_id(message: Message, state: FSMContext, starvell,
 
     if action == "price":
         await state.set_state(LotTestState.waiting_for_price)
-        await message.answer("💰 Отправьте новую цену для лота.")
+        await message.answer("💰 Отправьте новую цену для лота.\n\nДля отмены используйте <code>/cancel</code> или <code>-</code>.", parse_mode="HTML")
         return
 
     try:
@@ -1000,6 +998,11 @@ async def process_lot_test_lot_id(message: Message, state: FSMContext, starvell,
 async def process_lot_test_price(message: Message, state: FSMContext, starvell, **kwargs):
     if not is_user_authorized(message.from_user.id):
         await state.clear()
+        return
+
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
         return
 
     raw_price = (message.text or "").strip().replace(",", ".")
@@ -1821,10 +1824,11 @@ async def handle_reply_button(callback: CallbackQuery, state: FSMContext, **kwar
     await callback.message.answer(
         "✍️ <b>Быстрый ответ</b>\n\n"
         "Отправьте сообщение, которое хотите отправить пользователю.\n\n"
-        "Для отмены используйте /cancel",
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ Отмена", callback_data="reply_cancel")]
-        ])
+        ]),
+        parse_mode="HTML",
     )
 
 
@@ -1839,6 +1843,11 @@ async def handle_reply_cancel(callback: CallbackQuery, state: FSMContext):
 @router.message(ReplyState.waiting_for_reply)
 async def process_quick_reply(message: Message, state: FSMContext, **kwargs):
     """Обработка отправки быстрого ответа"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     # Получаем starvell из kwargs
     starvell = kwargs.get('starvell')
     
@@ -1919,7 +1928,7 @@ async def handle_review_reply_button(callback: CallbackQuery, state: FSMContext)
         "chat_id": callback.message.chat.id,
     }
     await state.set_state(ReviewReplyState.waiting_for_text)
-    await callback.message.answer("💬 Отправьте текст ответа на отзыв или <code>-</code> для отмены.", parse_mode="HTML")
+    await callback.message.answer("💬 Отправьте текст ответа на отзыв.\n\nДля отмены используйте <code>/cancel</code> или <code>-</code>.", parse_mode="HTML")
     await callback.answer()
 
 
@@ -2090,10 +2099,10 @@ async def process_review_reply_text(message: Message, state: FSMContext, **kwarg
         return
 
     text = (message.text or "").strip()
-    if text == "-":
+    if _is_cancel_text(text):
         REVIEW_REPLY_CONTEXT.pop(message.from_user.id, None)
         await state.clear()
-        await message.answer("Отменено.")
+        await message.answer("❌ Отменено")
         return
 
     try:

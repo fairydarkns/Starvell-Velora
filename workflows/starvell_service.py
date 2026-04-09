@@ -25,6 +25,44 @@ class StarvellService:
         self._session_error_notified = False  # Флаг для уведомления об ошибке сессии (1 раз)
         self.last_user_info: Dict[str, Any] = {}
         self._realtime_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+    @staticmethod
+    def normalize_order_status(order: Dict[str, Any]) -> str:
+        """Привести статус заказа Starvell к верхнему регистру."""
+        return str((order or {}).get("status", "")).upper()
+
+    @classmethod
+    def is_completed_order(cls, order: Dict[str, Any]) -> bool:
+        return cls.normalize_order_status(order) == "COMPLETED"
+
+    @classmethod
+    def is_cancelled_order(cls, order: Dict[str, Any]) -> bool:
+        return cls.normalize_order_status(order) in {"REFUND", "REFUNDED", "CANCELLED", "CANCELED"}
+
+    @classmethod
+    def is_active_order(cls, order: Dict[str, Any]) -> bool:
+        return cls.normalize_order_status(order) in {"CREATED", "PRE_CREATED"}
+
+    @classmethod
+    def is_waiting_buyer_confirmation(cls, order: Dict[str, Any]) -> bool:
+        return cls.normalize_order_status(order) in {"WAITING_CONFIRMATION", "PENDING_CONFIRMATION"}
+
+    @staticmethod
+    def extract_review_from_order_details(order_details: Dict[str, Any]) -> Dict[str, Any]:
+        """Достать review из разных вариантов Next Data без привязки к UI/фоновой задаче."""
+        page_props = (order_details or {}).get("pageProps", {})
+        bff = page_props.get("bff") or {}
+        candidates = (
+            page_props.get("review"),
+            (page_props.get("order") or {}).get("review"),
+            bff.get("review"),
+            (bff.get("order") or {}).get("review"),
+            (bff.get("orderDetails") or {}).get("review"),
+        )
+        for candidate in candidates:
+            if isinstance(candidate, dict) and candidate:
+                return candidate
+        return {}
         
     async def start(self):
         """Запустить сервис"""

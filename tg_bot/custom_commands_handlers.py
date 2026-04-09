@@ -28,6 +28,10 @@ class CustomCommandState(StatesGroup):
     editing_command_text = State()
 
 
+def _is_cancel_text(text: str | None) -> bool:
+    return (text or "").strip() in {"-", "/cancel"}
+
+
 def load_commands():
     """Загрузить кастомные команды из JSON"""
     try:
@@ -146,7 +150,7 @@ async def callback_add_custom_command(callback: CallbackQuery, state: FSMContext
 @router.message(CustomCommandState.waiting_for_command_name)
 async def process_command_name(message: Message, state: FSMContext, **kwargs):
     """Обработать название команды"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await message.answer("❌ Отменено")
         await state.clear()
         return
@@ -178,7 +182,7 @@ async def process_command_name(message: Message, state: FSMContext, **kwargs):
 @router.message(CustomCommandState.waiting_for_command_text)
 async def process_command_text(message: Message, state: FSMContext, **kwargs):
     """Обработать текст команды"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await message.answer("❌ Отменено")
         await state.clear()
         return
@@ -352,7 +356,7 @@ async def callback_change_prefix(callback: CallbackQuery, state: FSMContext, **k
 @router.message(CustomCommandState.waiting_for_prefix)
 async def process_prefix(message: Message, state: FSMContext, **kwargs):
     """Обработать новый префикс"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await message.answer("❌ Отменено")
         await state.clear()
         return
@@ -399,7 +403,7 @@ async def callback_edit_command(callback: CallbackQuery, state: FSMContext, **kw
 @router.message(CustomCommandState.editing_command_text)
 async def process_edit_command_text(message: Message, state: FSMContext, **kwargs):
     """Обработать новый текст команды"""
-    if message.text == "/cancel":
+    if _is_cancel_text(message.text):
         await message.answer("❌ Отменено")
         await state.clear()
         return

@@ -19,6 +19,8 @@ from tg_bot.full_keyboards import CBT
 
 
 router = Router()
+TEMPLATE_CHAT_CONTEXT: dict[int, str] = {}
+TEMPLATE_VIEW_CONTEXT: dict[int, dict] = {}
 
 
 class TemplateStates(StatesGroup):
@@ -29,6 +31,10 @@ class TemplateStates(StatesGroup):
     waiting_for_edit_text = State()
 
 
+def _is_cancel_text(text: str | None) -> bool:
+    return (text or "").strip() in {"-", "/cancel"}
+
+
 @router.callback_query(F.data.startswith("show_templates:"))
 async def callback_show_templates_for_reply(callback: CallbackQuery):
     """Показать быстрые ответы для выбора и отправки"""
@@ -36,6 +42,11 @@ async def callback_show_templates_for_reply(callback: CallbackQuery):
 
     # Извлекаем chat_id (может содержать двоеточия, берём всё после первого ":")
     chat_id = callback.data.split(":", 1)[1]
+    TEMPLATE_CHAT_CONTEXT[callback.from_user.id] = chat_id
+    TEMPLATE_VIEW_CONTEXT[callback.from_user.id] = {
+        "text": callback.message.html_text or callback.message.text or callback.message.caption or "",
+        "reply_markup": callback.message.reply_markup,
+    }
 
     template_manager = get_template_manager()
     templates = template_manager.get_all()
@@ -50,7 +61,23 @@ async def callback_show_templates_for_reply(callback: CallbackQuery):
 
     await callback.message.edit_text(
         text,
-        reply_markup=get_select_template_menu(chat_id, templates)
+        reply_markup=get_select_template_menu(chat_id, templates, back_callback="templates_back")
+    )
+
+
+@router.callback_query(F.data == "templates_back")
+async def callback_templates_back(callback: CallbackQuery):
+    """Вернуться из меню быстрых ответов к исходному уведомлению."""
+    await callback.answer()
+
+    context = TEMPLATE_VIEW_CONTEXT.get(callback.from_user.id)
+    if not context:
+        await callback.answer("❌ Контекст уведомления не найден", show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        context.get("text") or "Сообщение недоступно",
+        reply_markup=context.get("reply_markup"),
     )
 
 
@@ -87,13 +114,19 @@ async def callback_add_template(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "📝 <b>Добавление нового быстрого ответа</b>\n\n"
         "Отправьте название для быстрого ответа.\n\n"
-        "Например: <code>Приветствие</code>, <code>Благодарность</code>, <code>Отказ</code>"
+        "Например: <code>Приветствие</code>, <code>Благодарность</code>, <code>Отказ</code>\n\n"
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>."
     )
 
 
 @router.message(TemplateStates.waiting_for_name)
 async def process_template_name(message: Message, state: FSMContext):
     """Обработка названия быстрого ответа"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     name = message.text.strip()
     
     if not name or len(name) > 100:
@@ -109,13 +142,19 @@ async def process_template_name(message: Message, state: FSMContext):
     await message.answer(
         f"✅ Название: <b>{name}</b>\n\n"
         "Теперь отправьте текст быстрого ответа.\n\n"
-        "Это сообщение будет отправляться пользователям."
+        "Это сообщение будет отправляться пользователям.\n\n"
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>."
     )
 
 
 @router.message(TemplateStates.waiting_for_text)
 async def process_template_text(message: Message, state: FSMContext):
     """Обработка текста быстрого ответа"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     text = message.text.strip()
     
     if not text or len(text) > 4096:
@@ -223,14 +262,8 @@ async def callback_select_template(callback: CallbackQuery, starvell=None, **kwa
     chat_id = parts[2] if len(parts) > 2 else None
     
     # Если chat_id нет в callback_data, пытаемся извлечь из текста сообщения
-    if not chat_id and callback.message and callback.message.text:
-        # Ищем в тексте сообщения упоминание chat_id (например, в ссылке)
-        import re
-        text = callback.message.text
-        # Попытка найти UUID в тексте
-        uuid_match = re.search(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', text, re.IGNORECASE)
-        if uuid_match:
-            chat_id = uuid_match.group(0)
+    if not chat_id:
+        chat_id = TEMPLATE_CHAT_CONTEXT.get(callback.from_user.id)
     
     if not chat_id:
         await callback.answer("❌ Не указан чат", show_alert=True)
@@ -308,13 +341,19 @@ async def callback_edit_template_name(callback: CallbackQuery, state: FSMContext
     await callback.message.edit_text(
         f"✏️ <b>Редактирование названия</b>\n\n"
         f"<b>Текущее название:</b> {template['name']}\n\n"
-        f"Отправьте новое название для заготовки:"
+        f"Отправьте новое название для заготовки:\n\n"
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>."
     )
 
 
 @router.message(TemplateStates.waiting_for_edit_name)
 async def process_edit_template_name(message: Message, state: FSMContext):
     """Обработка нового названия заготовки"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     name = message.text.strip()
     
     if not name or len(name) > 100:
@@ -393,13 +432,19 @@ async def callback_edit_template_text(callback: CallbackQuery, state: FSMContext
     await callback.message.edit_text(
         f"📝 <b>Редактирование текста</b>\n\n"
         f"<b>Текущий текст:</b>\n{template['text']}\n\n"
-        f"Отправьте новый текст для заготовки:"
+        f"Отправьте новый текст для заготовки:\n\n"
+        "Для отмены используйте <code>/cancel</code> или <code>-</code>."
     )
 
 
 @router.message(TemplateStates.waiting_for_edit_text)
 async def process_edit_template_text(message: Message, state: FSMContext):
     """Обработка нового текста заготовки"""
+    if _is_cancel_text(message.text):
+        await state.clear()
+        await message.answer("❌ Отменено")
+        return
+
     text = message.text.strip()
     
     if not text or len(text) > 4096:
@@ -452,4 +497,3 @@ async def process_edit_template_text(message: Message, state: FSMContext):
             "❌ Ошибка при обновлении заготовки",
             reply_markup=get_templates_menu(template_manager.get_all())
         )
-
