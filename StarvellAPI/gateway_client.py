@@ -617,8 +617,19 @@ class StarAPI:
         )
 
     async def create_offer(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """TODO: создание новых лотов будет реализовано позже."""
-        raise NotImplementedError("TODO: create_offer пока не реализован")
+        """Создать новый лот."""
+        category_id = payload.get("categoryId")
+        referer = (
+            f"{self.config.BASE_URL}/offers/add/{category_id}"
+            if category_id is not None
+            else f"{self.config.BASE_URL}/offers/add"
+        )
+        return await self.session.post_json(
+            f"{self.config.API_URL}/offers/create",
+            data=payload,
+            referer=referer,
+            include_sid=True,
+        )
 
     async def delete_offer(self, offer_id: int) -> Dict[str, Any]:
         """

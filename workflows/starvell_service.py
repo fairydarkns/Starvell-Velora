@@ -10,6 +10,7 @@ from StarvellAPI.socket_client import StarSocketClient
 from StarvellAPI.api_exceptions import StarAPIError
 from support.runtime_config import BotConfig
 from support.runtime_storage import Database
+from support.starvell_lots import normalize_create_offer_payload
 
 logger = logging.getLogger(__name__)
 
@@ -632,9 +633,23 @@ class StarvellService:
         except Exception as e:
             raise RuntimeError(f"Ошибка удаления лота {lot_id}: {e}")
 
-    async def create_lot(self, *args, **kwargs) -> Dict[str, Any]:
-        """TODO: создание новых лотов будет реализовано позже"""
-        raise NotImplementedError("TODO: create_lot пока не реализован")
+    async def create_lot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Создать новый лот."""
+        if not self.api:
+            raise RuntimeError("API не инициализирован")
+
+        try:
+            normalized_payload = normalize_create_offer_payload(payload)
+            response = await self.api.create_offer(normalized_payload)
+
+            if isinstance(response, dict) and any(key in response for key in ("error", "errors", "message")):
+                error_value = response.get("error") or response.get("errors") or response.get("message")
+                if error_value:
+                    raise RuntimeError(str(error_value))
+
+            return response
+        except Exception as e:
+            raise RuntimeError(f"Ошибка создания лота: {e}")
 
     async def activate_lot(self, lot_id: str, amount: Optional[int] = None) -> bool:
         """

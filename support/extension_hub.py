@@ -12,6 +12,7 @@ from types import ModuleType
 from typing import Callable, Dict, Optional
 from uuid import UUID
 
+from aiogram import F
 from aiogram.filters.state import StateFilter
 
 logger = logging.getLogger("ExtensionHub")
@@ -283,6 +284,7 @@ class ExtensionHub:
                 )
 
         text_handlers_registered = False
+        document_handlers_registered = False
         for extension in active_extensions:
             logger.info(
                 "Зарегистрированы текстовые обработчики модуля %s: %s",
@@ -291,6 +293,13 @@ class ExtensionHub:
             )
             if getattr(extension.module, "TEXT_HANDLERS", {}):
                 text_handlers_registered = True
+            logger.info(
+                "Зарегистрированы document-обработчики модуля %s: %s",
+                extension.name,
+                len(getattr(extension.module, "DOCUMENT_HANDLERS", {})),
+            )
+            if getattr(extension.module, "DOCUMENT_HANDLERS", {}):
+                document_handlers_registered = True
 
         if text_handlers_registered:
             async def _dispatch_extension_text_handlers(message):
@@ -304,6 +313,19 @@ class ExtensionHub:
                             await handler(message)
 
             router.message.register(_dispatch_extension_text_handlers, StateFilter(None))
+
+        if document_handlers_registered:
+            async def _dispatch_extension_document_handlers(message):
+                for extension in active_extensions:
+                    module = extension.module
+                    if not hasattr(module, "DOCUMENT_HANDLERS"):
+                        continue
+                    for _, handler_data in module.DOCUMENT_HANDLERS.items():
+                        handler = handler_data.get("handler")
+                        if handler:
+                            await handler(message)
+
+            router.message.register(_dispatch_extension_document_handlers, StateFilter(None), F.document)
 
     async def execute_handlers(self, handlers: list[Callable], *args) -> None:
         for handler in handlers:
