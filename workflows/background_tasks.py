@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger('apscheduler').setLevel(logging.ERROR)
 
 REALTIME_IDLE_TIMEOUT = 90
-REALTIME_STALE_TIMEOUT = 180
+REALTIME_HARD_RECONNECT_TIMEOUT = 3600
 
 
 class BackgroundTasks:
@@ -155,17 +155,19 @@ class BackgroundTasks:
 
         if not socket.connected:
             logger.warning("Realtime socket Starvell отключен, пытаюсь переподключиться")
-            await self.starvell.ensure_realtime_connected()
+            ok = await self.starvell.ensure_realtime_connected(force=True)
+            logger.info("Результат переподключения realtime socket: %s", "успешно" if ok else "ошибка")
             return
 
         now = time.monotonic()
         idle_for = now - socket.last_activity_ts
-        if idle_for >= REALTIME_STALE_TIMEOUT:
+        if idle_for >= REALTIME_HARD_RECONNECT_TIMEOUT:
             logger.warning(
-                "Realtime socket Starvell выглядит зависшим (%.1f сек без активности), переподключаю",
+                "Realtime socket Starvell без событий %.1f сек, выполняю профилактический hard reconnect",
                 idle_for,
             )
-            await self.starvell.ensure_realtime_connected()
+            ok = await self.starvell.ensure_realtime_connected(force=True)
+            logger.info("Результат переподключения realtime socket: %s", "успешно" if ok else "ошибка")
 
     async def _handle_realtime_event(self, event: dict):
         event_name = event.get("event")

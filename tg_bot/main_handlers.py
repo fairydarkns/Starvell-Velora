@@ -62,6 +62,51 @@ def _safe_float(val, default=0.0):
         return default
 
 
+def _format_starvell_datetime(raw_value: str) -> str:
+    if not raw_value:
+        return "Неизвестно"
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        return dt.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return str(raw_value)
+
+
+def _extract_profile_metrics(user: dict) -> tuple[float, float, float]:
+    balance_data = user.get("balance", {})
+    balance = balance_data.get("rubBalance", 0) if isinstance(balance_data, dict) else 0
+    hold_balance = user.get("holdedAmount", 0)
+    total_balance = _safe_float(balance) + _safe_float(hold_balance)
+    return _safe_float(balance), _safe_float(hold_balance), total_balance
+
+
+def _format_verification_status(user: dict) -> str:
+    return "✅ Верифицирован" if user.get("kycStatus") == "VERIFIED" else "❌ Не верифицирован"
+
+
+def _build_profile_text(user: dict) -> str:
+    username = user.get("username", "Неизвестно")
+    user_id = user.get("id", "?")
+    created_at = _format_starvell_datetime(user.get("createdAt"))
+    balance, hold_balance, total_balance = _extract_profile_metrics(user)
+    rating = _safe_float(user.get("rating", 0))
+    reviews_count = int(user.get("reviewsCount", 0) or 0)
+    verified = _format_verification_status(user)
+
+    text = "👤 <b>Профиль продавца</b>\n\n"
+    text += f"<b>Имя:</b> {username}\n"
+    text += f"<b>ID:</b> <code>{user_id}</code>\n"
+    text += f"<b>Статус:</b> {verified}\n"
+    text += f"<b>Регистрация:</b> {created_at}\n\n"
+    text += "💰 <b>Баланс:</b>\n"
+    text += f"├ Доступно: <code>{balance:.2f}</code> ₽\n"
+    text += f"├ Заморожено: <code>{hold_balance:.2f}</code> ₽\n"
+    text += f"└ Всего: <code>{total_balance:.2f}</code> ₽\n\n"
+    text += f"⭐ <b>Рейтинг:</b> {rating:.1f} ({reviews_count} отзывов)"
+    return text
+
+
 def _normalize_for_json(value):
     """Подготовить произвольные данные заказа к JSON-выводу."""
     if isinstance(value, dict):
@@ -503,47 +548,7 @@ async def cmd_profile(message: Message, starvell, **kwargs):
             return
         
         user_data = user_info.get("user", {})
-        
-        # Формируем информацию о профиле
-        username = user_data.get("username", "Неизвестно")
-        user_id = user_data.get("id", "?")
-        
-        # Баланс может быть числом или словарем, безопасно извлекаем
-        balance_raw = user_data.get("balance", 0)
-        balance = balance_raw if isinstance(balance_raw, (int, float)) else 0
-        
-        hold_balance_raw = user_data.get("holdBalance", 0)
-        hold_balance = hold_balance_raw if isinstance(hold_balance_raw, (int, float)) else 0
-        
-        total_balance = balance + hold_balance
-        
-        # Получаем статус верификации
-        verified = "✅ Верифицирован" if user_data.get("verified") else "❌ Не верифицирован"
-        
-        # Получаем дату регистрации
-        created_at = user_data.get("createdAt", "Неизвестно")
-        if created_at != "Неизвестно":
-            from datetime import datetime
-            try:
-                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                created_at = dt.strftime("%d.%m.%Y %H:%M")
-            except:
-                pass
-        
-        # Рейтинг и отзывы
-        rating = user_data.get("rating", 0)
-        reviews_count = user_data.get("reviewsCount", 0)
-        
-        text = f"👤 <b>Профиль продавца</b>\n\n"
-        text += f"<b>Имя:</b> {username}\n"
-        text += f"<b>ID:</b> <code>{user_id}</code>\n"
-        text += f"<b>Статус:</b> {verified}\n"
-        text += f"<b>Регистрация:</b> {created_at}\n\n"
-        text = f"💰 <b>Баланс:</b>\n"
-        text += f"├ Доступно: <code>{_safe_float(balance):.2f}</code> ₽\n"
-        text += f"├ Заморожено: <code>{_safe_float(hold_balance):.2f}</code> ₽\n"
-        text += f"└ Всего: <code>{_safe_float(total_balance):.2f}</code> ₽\n\n"
-        text += f"⭐ <b>Рейтинг:</b> {_safe_float(rating):.1f} ({reviews_count} отзывов)"
+        text = _build_profile_text(user_data)
 
         # Кнопка для статистики
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -579,47 +584,7 @@ async def callback_profile_refresh(callback: CallbackQuery, starvell, **kwargs):
             return
         
         user_data = user_info.get("user", {})
-        
-        # Формируем информацию о профиле
-        username = user_data.get("username", "Неизвестно")
-        user_id = user_data.get("id", "?")
-        
-        # Баланс может быть числом или словарем, безопасно извлекаем
-        balance_raw = user_data.get("balance", 0)
-        balance = balance_raw if isinstance(balance_raw, (int, float)) else 0
-        
-        hold_balance_raw = user_data.get("holdBalance", 0)
-        hold_balance = hold_balance_raw if isinstance(hold_balance_raw, (int, float)) else 0
-        
-        total_balance = balance + hold_balance
-        
-        # Получаем статус верификации
-        verified = "✅ Верифицирован" if user_data.get("verified") else "❌ Не верифицирован"
-        
-        # Получаем дату регистрации
-        created_at = user_data.get("createdAt", "Неизвестно")
-        if created_at != "Неизвестно":
-            from datetime import datetime
-            try:
-                dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                created_at = dt.strftime("%d.%m.%Y %H:%M")
-            except:
-                pass
-        
-        # Рейтинг и отзывы
-        rating = user_data.get("rating", 0)
-        reviews_count = user_data.get("reviewsCount", 0)
-        
-        text = f"👤 <b>Профиль продавца</b>\n\n"
-        text += f"<b>Имя:</b> {username}\n"
-        text += f"<b>ID:</b> <code>{user_id}</code>\n"
-        text += f"<b>Статус:</b> {verified}\n"
-        text += f"<b>Регистрация:</b> {created_at}\n\n"
-        text += f"💰 <b>Баланс:</b>\n"
-        text += f"├ Доступно: <code>{_safe_float(balance):.2f}</code> ₽\n"
-        text += f"├ Заморожено: <code>{_safe_float(hold_balance):.2f}</code> ₽\n"
-        text += f"└ Всего: <code>{_safe_float(total_balance):.2f}</code> ₽\n\n"
-        text += f"⭐ <b>Рейтинг:</b> {rating:.1f} ({reviews_count} отзывов)"
+        text = _build_profile_text(user_data)
         
         # Кнопка для статистики
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -755,23 +720,9 @@ async def callback_profile_back(callback: CallbackQuery, starvell, **kwargs):
     user = user_info.get("user", {})
     username = user.get("username", "Неизвестно")
     user_id = user.get("id", "N/A")
-    # Получаем баланс корректно
-    balance_data = user.get("balance", {})
-    balance = balance_data.get("rubBalance", 0) if isinstance(balance_data, dict) else 0
-    hold_balance = user.get("holdedAmount", 0)
-    
-    # Статус верификации (KYC)
-    verified = "✅ Верифицирован" if user.get("kycStatus") == "VERIFIED" else "❌ Не верифицирован"
-    
-    # Регистрация
-    created_at = user.get("createdAt", "Неизвестно")
-    if created_at != "Неизвестно":
-        from datetime import datetime
-        try:
-            dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-            created_at = dt.strftime("%d.%m.%Y %H:%M")
-        except:
-            pass
+    balance, hold_balance, total_balance = _extract_profile_metrics(user)
+    verified = _format_verification_status(user)
+    created_at = _format_starvell_datetime(user.get("createdAt"))
     
     # Получаем статистику
     orders = await starvell.get_orders()
@@ -784,7 +735,7 @@ async def callback_profile_back(callback: CallbackQuery, starvell, **kwargs):
     if reviews:
         avg_rating = sum(r.get("rating", 0) for r in reviews) / len(reviews)
     else:
-        avg_rating = user.get("rating", 0)
+        avg_rating = _safe_float(user.get("rating", 0))
     
     text = f"👤 <b>Профиль</b>\n\n"
     text += f"<b>Имя:</b> {username}\n"
@@ -792,9 +743,9 @@ async def callback_profile_back(callback: CallbackQuery, starvell, **kwargs):
     text += f"<b>Статус:</b> {verified}\n"
     text += f"<b>Регистрация:</b> {created_at}\n\n"
     text += f"💰 <b>Баланс:</b>\n"
-    text += f"├ Доступно: <code>{_safe_float(balance):.2f}</code> ₽\n"
-    text += f"├ Заморожено: <code>{_safe_float(hold_balance):.2f}</code> ₽\n"
-    text += f"└ Всего: <code>{_safe_float(balance + hold_balance):.2f}</code> ₽\n\n"
+    text += f"├ Доступно: <code>{balance:.2f}</code> ₽\n"
+    text += f"├ Заморожено: <code>{hold_balance:.2f}</code> ₽\n"
+    text += f"└ Всего: <code>{total_balance:.2f}</code> ₽\n\n"
     text += f"📦 <b>Заказы:</b>\n"
     text += f"├ Всего: <code>{total_orders}</code>\n"
     text += f"⭐ <b>Средняя оценка:</b> <code>{avg_rating:.2f}</code>"

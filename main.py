@@ -41,7 +41,11 @@ async def run() -> None:
         return
 
     config_manager = get_config_manager(reload=True)
-    configure_logging(config_manager.get('Other', 'log_level', 'INFO'), PROJECT_ROOT)
+    configure_logging(
+        config_manager.get('Other', 'log_level', 'INFO'),
+        PROJECT_ROOT,
+        debug_enabled=config_manager.get('Other', 'debug', False),
+    )
 
     from tg_bot.runtime import main as telegram_runtime_main
 

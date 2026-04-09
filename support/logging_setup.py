@@ -71,7 +71,60 @@ class FileFormatter(logging.Formatter):
         return super().format(record)
 
 
-def configure_logging(level_name: str, project_root: Path) -> None:
+def _reset_named_logger(logger_name: str) -> logging.Logger:
+    logger = logging.getLogger(logger_name)
+    logger.handlers.clear()
+    return logger
+
+
+def _configure_websocket_logging(
+    *,
+    project_root: Path,
+    debug_enabled: bool,
+    file_formatter: logging.Formatter,
+) -> None:
+    websocket_loggers = (
+        "StarSocket",
+        "socketio",
+        "socketio.client",
+        "engineio",
+        "engineio.client",
+    )
+
+    if not debug_enabled:
+        for logger_name in websocket_loggers:
+            ws_logger = _reset_named_logger(logger_name)
+            if logger_name == "StarSocket":
+                ws_logger.setLevel(logging.INFO)
+                ws_logger.propagate = True
+            else:
+                ws_logger.setLevel(logging.WARNING)
+                ws_logger.propagate = True
+        return
+
+    websocket_log_path = project_root / "logs" / "websocket.log"
+    websocket_log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    websocket_file_handler = RotatingFileHandler(
+        websocket_log_path,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+        encoding="utf-8",
+    )
+    websocket_file_handler.setLevel(logging.DEBUG)
+    websocket_file_handler.setFormatter(file_formatter)
+
+    for logger_name in websocket_loggers:
+        ws_logger = _reset_named_logger(logger_name)
+        ws_logger.setLevel(logging.DEBUG)
+        ws_logger.addHandler(websocket_file_handler)
+        if logger_name == "StarSocket":
+            ws_logger.propagate = True
+        else:
+            ws_logger.propagate = False
+
+
+def configure_logging(level_name: str, project_root: Path, debug_enabled: bool = False) -> None:
     log_path = project_root / "logs" / "log.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -112,3 +165,8 @@ def configure_logging(level_name: str, project_root: Path) -> None:
     root_logger.addHandler(file_handler)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
     logging.getLogger("tzlocal").setLevel(logging.ERROR)
+    _configure_websocket_logging(
+        project_root=project_root,
+        debug_enabled=debug_enabled,
+        file_formatter=file_formatter,
+    )

@@ -74,13 +74,17 @@ class StarvellService:
     async def wait_realtime_event(self) -> Dict[str, Any]:
         return await self._realtime_queue.get()
 
-    async def ensure_realtime_connected(self) -> bool:
+    async def ensure_realtime_connected(self, force: bool = False) -> bool:
         if not self.socket:
             return False
-        if self.socket.connected:
+        if self.socket.connected and not force:
             return True
         try:
-            await self.socket.reconnect()
+            try:
+                self.last_user_info = await self.api.get_user_info() if self.api else self.last_user_info
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Не удалось обновить sid перед reconnect realtime socket: %s", exc)
+            await self.socket.reconnect(force=force)
             return self.socket.connected
         except Exception as exc:  # noqa: BLE001
             logger.warning("Не удалось переподключить realtime socket Starvell: %s", exc)

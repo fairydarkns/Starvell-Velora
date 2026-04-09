@@ -10,6 +10,14 @@ from .api_exceptions import NotFoundError
 
 logger = logging.getLogger("API")
 
+
+def _normalize_wallet_amount(value: Any) -> float:
+    """Преобразовать копейки Starvell в рубли."""
+    try:
+        return float(value) / 100.0
+    except (TypeError, ValueError):
+        return 0.0
+
 class StarAPI:
     """
     Главный класс для работы с Starvell API
@@ -111,19 +119,46 @@ class StarAPI:
         Returns:
             dict: Информация о пользователе и статус авторизации
         """
-        data = await self._get_next_data("index.json")
-        page_props = data.get("pageProps", {})
-        
-        # Попытка получить SID из ответа
-        sid = page_props.get("sid")
+        index_data = await self._get_next_data("index.json")
+        index_page_props = index_data.get("pageProps", {})
+        index_user = index_page_props.get("user") or {}
+
+        # Получаем SID для дальнейших запросов.
+        sid = index_page_props.get("sid")
         if sid:
             self.session.set_sid(sid)
-        
+
+        user = dict(index_user)
+        theme = index_page_props.get("currentTheme")
+
+        try:
+            wallet_data = await self._get_next_data("wallet.json", include_sid=True)
+            wallet_page_props = wallet_data.get("pageProps", {})
+            wallet_user = wallet_page_props.get("user") or {}
+            if wallet_user:
+                user = dict(wallet_user)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Не удалось получить wallet.json, использую index.json для профиля: %s", exc)
+
+        # Структура wallet.json отдает суммы в копейках.
+        balance_payload = user.get("balance")
+        rub_balance_raw = None
+        if isinstance(balance_payload, dict):
+            rub_balance_raw = balance_payload.get("rubBalance")
+        if rub_balance_raw is None:
+            rub_balance_raw = user.get("rubBalance", 0)
+
+        user["balance"] = {
+            "rubBalance": _normalize_wallet_amount(rub_balance_raw),
+        }
+        user["holdedAmount"] = _normalize_wallet_amount(user.get("holdedAmount", 0))
+        user["verified"] = user.get("kycStatus") == "VERIFIED"
+
         return {
-            "authorized": bool(page_props.get("user")),
-            "user": page_props.get("user"),
+            "authorized": bool(user),
+            "user": user,
             "sid": sid or self.session.get_sid(),
-            "theme": page_props.get("currentTheme"),
+            "theme": theme,
         }
     
     async def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:

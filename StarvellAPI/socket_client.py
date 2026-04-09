@@ -37,17 +37,8 @@ class StarSocketClient:
         self.session = session
         self.config = config
         self.on_event = on_event
-        self.client = socketio.AsyncClient(
-            reconnection=True,
-            reconnection_attempts=0,
-            reconnection_delay=2,
-            reconnection_delay_max=15,
-            randomization_factor=0.2,
-            logger=False,
-            engineio_logger=False,
-        )
         self._last_activity_ts = time.monotonic()
-        self._register_handlers()
+        self._create_client()
 
     @property
     def connected(self) -> bool:
@@ -59,6 +50,24 @@ class StarSocketClient:
 
     def mark_activity(self) -> None:
         self._last_activity_ts = time.monotonic()
+
+    def _create_client(self) -> None:
+        socketio_logger: Any = False
+        engineio_logger: Any = False
+        if logger.isEnabledFor(logging.DEBUG):
+            socketio_logger = logging.getLogger("socketio.client")
+            engineio_logger = logging.getLogger("engineio.client")
+
+        self.client = socketio.AsyncClient(
+            reconnection=True,
+            reconnection_attempts=0,
+            reconnection_delay=2,
+            reconnection_delay_max=15,
+            randomization_factor=0.2,
+            logger=socketio_logger,
+            engineio_logger=engineio_logger,
+        )
+        self._register_handlers()
 
     def _register_handlers(self) -> None:
         for namespace in self.NAMESPACES:
@@ -135,11 +144,14 @@ class StarSocketClient:
         self.mark_activity()
         logger.info("Socket.IO клиент Starvell остановлен")
 
-    async def reconnect(self) -> None:
+    async def reconnect(self, force: bool = False) -> None:
         logger.warning("Переподключаю Socket.IO клиент Starvell")
+        old_client = self.client
         try:
-            if self.connected:
-                await self.client.disconnect()
+            if old_client.connected:
+                await old_client.disconnect()
         except Exception as exc:  # noqa: BLE001
             logger.debug("Ошибка при отключении Socket.IO перед reconnect: %s", exc)
+        if force:
+            self._create_client()
         await self.start()
