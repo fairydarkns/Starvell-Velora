@@ -97,6 +97,33 @@ def _format_verification_status(user: dict) -> str:
     return "✅ Верифицирован" if user.get("kycStatus") == "VERIFIED" else "❌ Не верифицирован"
 
 
+def _normalized_order_status(order: dict) -> str:
+    return str(order.get("status", "")).upper()
+
+
+def _is_completed_order(order: dict) -> bool:
+    return _normalized_order_status(order) == "COMPLETED"
+
+
+def _is_cancelled_order(order: dict) -> bool:
+    return _normalized_order_status(order) in {"REFUND", "REFUNDED", "CANCELLED", "CANCELED"}
+
+
+def _is_active_order(order: dict) -> bool:
+    return _normalized_order_status(order) in {"CREATED", "PRE_CREATED"}
+
+
+def _parse_starvell_datetime(raw_value: str):
+    from datetime import datetime
+
+    if not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
 def _build_profile_text(user: dict) -> str:
     username = user.get("username", "Неизвестно")
     user_id = user.get("id", "?")
@@ -625,11 +652,11 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         # Получаем заказы
         orders = await starvell.get_orders()
         
-        # Анализируем статистику (проверка регистра статуса)
+        # Анализируем статистику по явным статусам Starvell.
         total_orders = len(orders)
-        completed_orders = sum(1 for order in orders if str(order.get("status")).upper() == "COMPLETED")
-        cancelled_orders = sum(1 for order in orders if str(order.get("status")).upper() == "CANCELLED")
-        active_orders = total_orders - completed_orders - cancelled_orders
+        completed_orders = sum(1 for order in orders if _is_completed_order(order))
+        cancelled_orders = sum(1 for order in orders if _is_cancelled_order(order))
+        active_orders = sum(1 for order in orders if _is_active_order(order))
         
         # Считаем доход: Starvell отдает суммы заказов в копейках.
         total_income = sum(
@@ -643,8 +670,8 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         avg_rating = sum(r.get("rating", 0) for r in reviews) / len(reviews) if reviews else starvell.last_user_info.get("user", {}).get("rating", 0)
         
         # Статистика по датам
-        from datetime import datetime, timedelta
-        now = datetime.now()
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         week_start = today_start - timedelta(days=7)
         month_start = today_start - timedelta(days=30)
@@ -657,30 +684,30 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         income_month = 0
         
         for order in orders:
-            if str(order.get("status")).upper() != "COMPLETED":
+            if not _is_completed_order(order):
                 continue
                 
             created_at = order.get("createdAt")
             if not created_at:
                 continue
                 
-            try:
-                order_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                order_price = _order_money_rub(order, "basePrice", "totalPrice", "price")
-                
-                if order_date >= today_start:
-                    orders_today += 1
-                    income_today += order_price
-                    
-                if order_date >= week_start:
-                    orders_week += 1
-                    income_week += order_price
-                    
-                if order_date >= month_start:
-                    orders_month += 1
-                    income_month += order_price
-            except:
+            order_date = _parse_starvell_datetime(created_at)
+            if order_date is None:
                 continue
+
+            order_price = _order_money_rub(order, "basePrice", "totalPrice", "price")
+            
+            if order_date >= today_start:
+                orders_today += 1
+                income_today += order_price
+                
+            if order_date >= week_start:
+                orders_week += 1
+                income_week += order_price
+                
+            if order_date >= month_start:
+                orders_month += 1
+                income_month += order_price
         
         text = f"📊 <b>Подробная статистика</b>\n\n"
         text += f"📦 <b>Заказы:</b>\n"
@@ -743,7 +770,7 @@ async def callback_profile_back(callback: CallbackQuery, starvell, **kwargs):
     # Получаем статистику
     orders = await starvell.get_orders()
     total_orders = len(orders)
-    active_orders = sum(1 for o in orders if str(o.get("status")).upper() not in ["COMPLETED", "CANCELLED"])
+    active_orders = sum(1 for order in orders if _is_active_order(order))
     
     # Статистика по отзывам
     reviews = [o.get("review") for o in orders if o.get("review")]
