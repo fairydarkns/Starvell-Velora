@@ -64,6 +64,23 @@ class StarvellService:
             if isinstance(candidate, dict) and candidate:
                 return candidate
         return {}
+
+    @staticmethod
+    def extract_order_income_rub(order: Dict[str, Any]) -> float:
+        """Доход продавца по заказу: строго из basePrice."""
+        if not isinstance(order, dict):
+            return 0.0
+        if order.get("basePriceRub") is not None:
+            try:
+                return float(order.get("basePriceRub"))
+            except (TypeError, ValueError):
+                return 0.0
+        if order.get("basePrice") is not None:
+            try:
+                return float(order.get("basePrice")) / 100.0
+            except (TypeError, ValueError):
+                return 0.0
+        return 0.0
         
     async def start(self):
         """Запустить сервис"""

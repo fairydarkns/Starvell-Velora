@@ -331,6 +331,7 @@ class BackgroundTasks:
                 short_id=short_id,
                 buyer=buyer_name,
                 seller=seller_name,
+                chat_id=chat_id,
             )
             return
 
@@ -343,6 +344,7 @@ class BackgroundTasks:
                 short_id=short_id,
                 buyer=buyer_name,
                 seller=seller_name,
+                chat_id=chat_id,
             )
             return
 
@@ -354,6 +356,7 @@ class BackgroundTasks:
                 order_id=order_id,
                 short_id=short_id,
                 buyer=buyer_name,
+                chat_id=chat_id,
             )
             return
 
@@ -537,15 +540,7 @@ class BackgroundTasks:
             clean_id = order_id.replace("-", "")
             short_id = clean_id[-8:].upper() if len(clean_id) >= 8 else order_id[:8].upper()
 
-        amount = (
-            order.get("displayAmountRub")
-            or order.get("totalPriceRub")
-            or order.get("basePriceRub")
-            or order.get("priceRub")
-        )
-        if amount is None:
-            amount_kopecks = order.get("totalPrice") or order.get("basePrice") or order.get("price") or 0
-            amount = amount_kopecks / 100
+        amount = self.starvell.extract_order_income_rub(order)
 
         buyer = order.get("user") or order.get("buyer") or {}
         buyer_id = order.get("buyerId")

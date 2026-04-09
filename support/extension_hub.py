@@ -312,7 +312,7 @@ class ExtensionHub:
                         if handler:
                             await handler(message)
 
-            router.message.register(_dispatch_extension_text_handlers, StateFilter(None))
+            router.message.register(_dispatch_extension_text_handlers, StateFilter(None), F.text)
 
         if document_handlers_registered:
             async def _dispatch_extension_document_handlers(message):

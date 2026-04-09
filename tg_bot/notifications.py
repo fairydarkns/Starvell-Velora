@@ -532,6 +532,59 @@ class NotificationManager:
         )
 
     @staticmethod
+    def _build_order_actions_keyboard(order_id: str, chat_id: str | None = None, *, allow_refund: bool = True) -> InlineKeyboardMarkup:
+        from support.templates_manager import get_template_manager
+
+        rows: list[list[InlineKeyboardButton]] = []
+
+        if allow_refund and order_id and len(f"refund:{order_id}") <= 64:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="💰 Вернуть деньги",
+                        callback_data=f"refund:{order_id}",
+                    )
+                ]
+            )
+
+        if chat_id:
+            template_manager = get_template_manager()
+            templates_count = template_manager.count()
+            row: list[InlineKeyboardButton] = []
+
+            reply_callback = f"r:{chat_id}"
+            if len(reply_callback.encode("utf-8")) <= 64:
+                row.append(
+                    InlineKeyboardButton(
+                        text="📝 Ответить",
+                        callback_data=reply_callback,
+                    )
+                )
+
+            tpl_text = f"📝 Быстрые ответы ({templates_count})" if templates_count > 0 else "📝 Быстрые ответы"
+            tpl_callback = f"show_templates:{chat_id}"
+            if len(tpl_callback.encode("utf-8")) <= 64:
+                row.append(
+                    InlineKeyboardButton(
+                        text=tpl_text,
+                        callback_data=tpl_callback,
+                    )
+                )
+
+            if row:
+                rows.append(row)
+
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔗 Открыть заказ",
+                    url=f"https://starvell.com/order/{order_id}",
+                )
+            ]
+        )
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @staticmethod
     def _build_review_keyboard(
         order_id: str,
         review_id: str | None = None,
@@ -579,6 +632,7 @@ class NotificationManager:
         short_id: str,
         buyer: str,
         seller: str,
+        chat_id: str | None = None,
     ) -> None:
         message = (
             f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
@@ -589,7 +643,7 @@ class NotificationManager:
         await self.notify_all_admins(
             NotificationType.ORDER_READY,
             message,
-            keyboard=self._build_order_link_keyboard(order_id),
+            keyboard=self._build_order_actions_keyboard(order_id, chat_id, allow_refund=True),
             force=False,
         )
 
@@ -598,6 +652,7 @@ class NotificationManager:
         order_id: str,
         short_id: str,
         buyer: str,
+        chat_id: str | None = None,
     ) -> None:
         message = (
             f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
@@ -607,7 +662,7 @@ class NotificationManager:
         await self.notify_all_admins(
             NotificationType.ORDER_CONFIRMED,
             message,
-            keyboard=self._build_order_link_keyboard(order_id),
+            keyboard=self._build_order_actions_keyboard(order_id, chat_id, allow_refund=True),
             force=False,
         )
 
@@ -617,6 +672,7 @@ class NotificationManager:
         short_id: str,
         buyer: str,
         seller: str,
+        chat_id: str | None = None,
     ) -> None:
         message = (
             f"🆔 <b>ID заказа:</b> #{short_id}\n\n"
@@ -627,7 +683,7 @@ class NotificationManager:
         await self.notify_all_admins(
             NotificationType.ORDER_CANCELLED,
             message,
-            keyboard=self._build_order_link_keyboard(order_id),
+            keyboard=self._build_order_actions_keyboard(order_id, chat_id, allow_refund=False),
             force=False,
         )
 
@@ -812,20 +868,14 @@ class NotificationManager:
             plugin_order_data['buyer'] = buyer
         
         # Получаем цену. API уже может отдать нормализованные поля в рублях.
-        amount_rub = (
-            order_data.get("displayAmountRub")
-            or order_data.get("totalPriceRub")
-            or order_data.get("basePriceRub")
-            or order_data.get("priceRub")
-        )
-        if amount_rub is None:
-            amount_kopecks = (
-                order_data.get("totalPrice") or
-                order_data.get("basePrice") or
-                order_data.get("price") or
-                0
-            )
-            amount_rub = amount_kopecks / 100
+        if self.starvell_service:
+            amount_rub = self.starvell_service.extract_order_income_rub(order_data)
+        else:
+            amount_rub = 0.0
+            if order_data.get("basePriceRub") is not None:
+                amount_rub = float(order_data.get("basePriceRub") or 0.0)
+            elif order_data.get("basePrice") is not None:
+                amount_rub = float(order_data.get("basePrice") or 0) / 100.0
         plugin_order_data['amount'] = amount_rub
         
         # Получаем данные лота
