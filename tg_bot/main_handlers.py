@@ -93,6 +93,14 @@ def _order_money_rub(order: dict, *fields: str) -> float:
     return 0.0
 
 
+def _order_income_rub(order: dict) -> float:
+    if "basePriceRub" in order:
+        return _safe_float(order.get("basePriceRub"))
+    if "basePrice" in order:
+        return _safe_float(order.get("basePrice")) / 100.0
+    return 0.0
+
+
 def _format_verification_status(user: dict) -> str:
     return "✅ Верифицирован" if user.get("kycStatus") == "VERIFIED" else "❌ Не верифицирован"
 
@@ -660,9 +668,9 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         
         # Считаем доход: Starvell отдает суммы заказов в копейках.
         total_income = sum(
-            _order_money_rub(order, "basePrice", "totalPrice", "price")
+            _order_income_rub(order)
             for order in orders
-            if str(order.get("status")).upper() == "COMPLETED"
+            if _is_completed_order(order)
         )
         
         # Считаем среднюю оценку
@@ -695,7 +703,7 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
             if order_date is None:
                 continue
 
-            order_price = _order_money_rub(order, "basePrice", "totalPrice", "price")
+            order_price = _order_income_rub(order)
             
             if order_date >= today_start:
                 orders_today += 1
