@@ -1,6 +1,6 @@
 """Runtime version metadata for manual updates."""
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 GITHUB_REPO = "fairydarkns/Starvell-Velora"
 UPDATE_BRANCH = "master"
 VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{UPDATE_BRANCH}/version.py"

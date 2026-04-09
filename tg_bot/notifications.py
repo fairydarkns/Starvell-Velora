@@ -811,15 +811,22 @@ class NotificationManager:
         elif isinstance(buyer, str):
             plugin_order_data['buyer'] = buyer
         
-        # Получаем цену (конвертируем из копеек)
-        amount_kopecks = (
-            order_data.get("totalPrice") or 
-            order_data.get("basePrice") or 
-            order_data.get("price") or 
-            order_data.get("amount") or 
-            0
+        # Получаем цену. API уже может отдать нормализованные поля в рублях.
+        amount_rub = (
+            order_data.get("displayAmountRub")
+            or order_data.get("totalPriceRub")
+            or order_data.get("basePriceRub")
+            or order_data.get("priceRub")
         )
-        plugin_order_data['amount'] = amount_kopecks / 100
+        if amount_rub is None:
+            amount_kopecks = (
+                order_data.get("totalPrice") or
+                order_data.get("basePrice") or
+                order_data.get("price") or
+                0
+            )
+            amount_rub = amount_kopecks / 100
+        plugin_order_data['amount'] = amount_rub
         
         # Получаем данные лота
         lot = order_data.get("offerDetails") or order_data.get("listing") or {}

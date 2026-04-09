@@ -81,6 +81,18 @@ def _extract_profile_metrics(user: dict) -> tuple[float, float, float]:
     return _safe_float(balance), _safe_float(hold_balance), total_balance
 
 
+def _order_money_rub(order: dict, *fields: str) -> float:
+    if "displayAmountRub" in order:
+        return _safe_float(order.get("displayAmountRub"))
+    for field in fields:
+        rub_field = f"{field}Rub"
+        if rub_field in order:
+            return _safe_float(order.get(rub_field))
+        if field in order:
+            return _safe_float(order.get(field)) / 100.0
+    return 0.0
+
+
 def _format_verification_status(user: dict) -> str:
     return "✅ Верифицирован" if user.get("kycStatus") == "VERIFIED" else "❌ Не верифицирован"
 
@@ -619,8 +631,12 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         cancelled_orders = sum(1 for order in orders if str(order.get("status")).upper() == "CANCELLED")
         active_orders = total_orders - completed_orders - cancelled_orders
         
-        # Считаем доход (ключ basePrice)
-        total_income = sum(order.get("basePrice", 0) for order in orders if str(order.get("status")).upper() == "COMPLETED")
+        # Считаем доход: Starvell отдает суммы заказов в копейках.
+        total_income = sum(
+            _order_money_rub(order, "basePrice", "totalPrice", "price")
+            for order in orders
+            if str(order.get("status")).upper() == "COMPLETED"
+        )
         
         # Считаем среднюю оценку
         reviews = [order.get("review", {}) for order in orders if order.get("review")]
@@ -641,7 +657,7 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
         income_month = 0
         
         for order in orders:
-            if order.get("status") != "completed":
+            if str(order.get("status")).upper() != "COMPLETED":
                 continue
                 
             created_at = order.get("createdAt")
@@ -650,7 +666,7 @@ async def callback_profile_stats(callback: CallbackQuery, starvell, **kwargs):
                 
             try:
                 order_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                order_price = order.get("basePrice", 0)
+                order_price = _order_money_rub(order, "basePrice", "totalPrice", "price")
                 
                 if order_date >= today_start:
                     orders_today += 1

@@ -18,6 +18,33 @@ def _normalize_wallet_amount(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
 
+
+def _normalize_order_money(order: Dict[str, Any]) -> Dict[str, Any]:
+    """Добавить к заказу нормализованные денежные поля, не ломая raw-структуру."""
+    if not isinstance(order, dict):
+        return order
+
+    normalized = dict(order)
+    for field in ("basePrice", "totalPrice", "price"):
+        if field in normalized:
+            raw_field = f"{field}Raw"
+            rub_field = f"{field}Rub"
+            normalized.setdefault(raw_field, normalized.get(field))
+            normalized[rub_field] = _normalize_wallet_amount(normalized.get(raw_field))
+
+    if "shortId" not in normalized or not normalized.get("shortId"):
+        order_id = str(normalized.get("id", ""))
+        clean_id = order_id.replace("-", "")
+        normalized["shortId"] = clean_id[-8:].upper() if len(clean_id) >= 8 else order_id[:8].upper()
+
+    normalized["displayAmountRub"] = (
+        normalized.get("totalPriceRub")
+        or normalized.get("basePriceRub")
+        or normalized.get("priceRub")
+        or 0.0
+    )
+    return normalized
+
 class StarAPI:
     """
     Главный класс для работы с Starvell API
@@ -390,8 +417,8 @@ class StarAPI:
             import logging
             logger = logging.getLogger(__name__)
             logger.debug(f"Не удалось обогатить заказы данными пользователей: {e}")
-        
-        return all_orders
+
+        return [_normalize_order_money(order) for order in all_orders if isinstance(order, dict)]
         
     async def refund_order(self, order_id: str) -> Dict[str, Any]:
         """
@@ -491,11 +518,18 @@ class StarAPI:
         Returns:
             dict: Полные данные заказа включая chat_id, buyer, lot и т.д.
         """
-        return await self._get_next_data(
+        data = await self._get_next_data(
             f"order/{order_id}.json",
             params=f"?order_id={order_id}",
             include_sid=True,
         )
+        page_props = data.get("pageProps", {})
+        if isinstance(page_props.get("order"), dict):
+            page_props["order"] = _normalize_order_money(page_props["order"])
+        bff = page_props.get("bff")
+        if isinstance(bff, dict) and isinstance(bff.get("order"), dict):
+            bff["order"] = _normalize_order_money(bff["order"])
+        return data
         
     # ==================== Офферы ====================
     
