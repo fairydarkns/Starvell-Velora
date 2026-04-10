@@ -55,7 +55,6 @@ class ConfigManager:
         self._config['Starvell'] = {
             'session_cookie': '',
             'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'autoRaise': 'false',
             'autoDelivery': 'false',
             'autoRestore': 'false',
             'autoRead': 'true',
@@ -155,7 +154,6 @@ class ConfigManager:
             'Starvell': {
                 'session_cookie': '',
                 'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'autoRaise': 'false',
                 'autoDelivery': 'false',
                 'autoRestore': 'false',
                 'autoRead': 'true',
@@ -185,6 +183,7 @@ class ConfigManager:
                 'autoTicket': 'true',
                 'orderConfirmed': 'false',
                 'review': 'false',
+                'reviewDeleted': 'false',
                 'autoResponses': 'false',
             },
             'AutoResponse': {
@@ -245,6 +244,21 @@ class ConfigManager:
         """
         default = self._get_default_template()
         changes_made = False
+
+        # Миграция старого флага Starvell.autoRaise в единственное место
+        # хранения AutoRaise.enabled. После миграции legacy-ключ будет удалён
+        # обычной синхронизацией схемы ниже.
+        if self._config.has_option('Starvell', 'autoRaise'):
+            try:
+                legacy_auto_raise = self._config.getboolean('Starvell', 'autoRaise')
+            except ValueError:
+                legacy_auto_raise = False
+            if legacy_auto_raise:
+                if not self._config.has_section('AutoRaise'):
+                    self._config.add_section('AutoRaise')
+                if not self._config.getboolean('AutoRaise', 'enabled', fallback=False):
+                    self._config.set('AutoRaise', 'enabled', 'true')
+                    changes_made = True
 
         # Удаляем лишние секции (те, которые не описаны в шаблоне)
         for section in list(self._config.sections()):
@@ -622,7 +636,7 @@ class BotConfig:
     # === Авто-поднятие ===
     @staticmethod
     def AUTO_BUMP_ENABLED() -> bool:
-        return _config_manager.get('Starvell', 'autoRaise', False)
+        return _config_manager.get('AutoRaise', 'enabled', False)
     
     @staticmethod
     def AUTO_BUMP_INTERVAL() -> int:
@@ -805,7 +819,6 @@ class BotConfig:
         """Обновить конфигурацию
         
         Пример: update(**{'auto_bump.enabled': True})
-        Или: update(**{'Starvell.autoRaise': True})
         """
         for key, value in kwargs.items():
             if '.' in key:
@@ -815,7 +828,7 @@ class BotConfig:
                 
                 # Маппинг ключей на секции и параметры конфига
                 if section_key == 'auto_bump' and cfg_key == 'enabled':
-                    _config_manager.set('Starvell', 'autoRaise', value)
+                    _config_manager.set('AutoRaise', 'enabled', value)
                 elif section_key == 'auto_delivery' and cfg_key == 'enabled':
                     _config_manager.set('Starvell', 'autoDelivery', value)
                 elif section_key == 'auto_restore' and cfg_key == 'enabled':

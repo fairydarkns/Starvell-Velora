@@ -247,7 +247,7 @@ async def main():
             # Не отправляем нотификацию здесь, чтобы не дублировать логику
             # уведомления, уже реализованную в StarvellService._notify_session_error().
             logger.error("Не удалось авторизоваться в Starvell! Продолжаю работу без авторизации.")
-            logger.error("Проверьте session_cookie в configs/_main.cfg")
+            logger.error("Обновите session_cookie командой /session_cookie или в configs/_main.cfg")
             
         user = user_info.get("user", {})
         

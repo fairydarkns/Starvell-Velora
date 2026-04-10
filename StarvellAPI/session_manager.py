@@ -125,7 +125,7 @@ class SessionManager:
                     proxy_auth=proxy_auth,
                 ) as resp:
                     # Обработка статус кодов
-                    if resp.status == 401:
+                    if resp.status in (401, 403):
                         raise AuthenticationError("Неверный session cookie")
                     elif resp.status == 404:
                         raise NotFoundError(f"Ресурс не найден: {url}")
@@ -204,7 +204,7 @@ class SessionManager:
                     # Обработка статус кодов
                     if resp.status == 400:
                         raise StarAPIError(f"Bad Request (400): {error_message}")
-                    elif resp.status == 401:
+                    elif resp.status in (401, 403):
                         raise AuthenticationError("Неверный session cookie")
                     elif resp.status == 404:
                         raise NotFoundError(f"Ресурс не найден: {url}")
@@ -270,7 +270,7 @@ class SessionManager:
                     proxy_auth=proxy_auth,
                 ) as resp:
                     # Обработка статус кодов
-                    if resp.status == 401:
+                    if resp.status in (401, 403):
                         raise AuthenticationError("Неверный session cookie")
                     elif resp.status == 404:
                         raise NotFoundError(f"Ресурс не найден: {url}")

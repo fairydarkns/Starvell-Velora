@@ -7,7 +7,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from StarvellAPI.gateway_client import StarAPI
 from StarvellAPI.socket_client import StarSocketClient
-from StarvellAPI.api_exceptions import StarAPIError
+from StarvellAPI.api_exceptions import AuthenticationError
 from support.runtime_config import BotConfig
 from support.runtime_storage import Database
 from support.starvell_lots import normalize_create_offer_payload
@@ -108,7 +108,10 @@ class StarvellService:
         self._session_error_notified = False
         try:
             self.last_user_info = await self.api.get_user_info()
-        except Exception:
+            if not self.last_user_info.get("authorized"):
+                await self._notify_session_error()
+        except Exception as exc:  # noqa: BLE001
+            await self._notify_auth_error_if_needed(exc)
             self.last_user_info = {}
         try:
             self.socket = StarSocketClient(
@@ -160,6 +163,13 @@ class StarvellService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Не удалось переподключить realtime socket Starvell: %s", exc)
             return False
+
+    async def _notify_auth_error_if_needed(self, error: Exception) -> bool:
+        """Уведомить только при явной ошибке авторизации, не при обычных 404."""
+        if isinstance(error, AuthenticationError):
+            await self._notify_session_error()
+            return True
+        return False
     
     async def _notify_session_error(self):
         """Отправить уведомление об ошибке сессии (только один раз)"""
@@ -170,7 +180,9 @@ class StarvellService:
         
         import logging
         logger = logging.getLogger(__name__)
-        logger.error("⚠️ СЕССИЯ STARVELL УСТАРЕЛА! Токен невалиден или истёк. Обновите session_cookie в конфигурации.")
+        logger.error(
+            "⚠️ Не удалось подтвердить авторизацию Starvell. Обновите session_cookie через /session_cookie или в конфигурации."
+        )
         
         # Пытаемся отправить уведомление админам
         try:
@@ -179,13 +191,14 @@ class StarvellService:
             if notification_manager:
                 await notification_manager.notify_all_admins(
                     "error",
-                    "⚠️ <b>Сессия Starvell устарела!</b>\n\n"
-                    "Токен (session_cookie) невалиден или истёк.\n"
-                    "Starvell сбросил сессию.\n\n"
+                    "⚠️ <b>Не удалось подтвердить авторизацию Starvell</b>\n\n"
+                    "Бот получил явный отказ авторизации или профиль вернулся без пользователя.\n"
+                    "Обычные 404/сбои Next Data больше не считаются протухшей сессией.\n\n"
                     "🔧 <b>Необходимо:</b>\n"
                     "1. Получить новый session_cookie из браузера\n"
-                    "2. Обновить его в конфигурации (_main.cfg)\n"
-                    "3. Перезапустить бота",
+                    "2. Отправить боту: <code>/session_cookie новый_cookie</code>\n"
+                    "3. Либо отправить <code>/session_cookie</code> и ввести значение следующим сообщением\n\n"
+                    "Файл configs/_main.cfg вручную править не обязательно.",
                     force=True
                 )
         except Exception as e:
@@ -199,11 +212,11 @@ class StarvellService:
         try:
             info = await self.api.get_user_info()
             self.last_user_info = info
+            if not info.get("authorized"):
+                await self._notify_session_error()
             return info
         except Exception as e:
-            from StarvellAPI.api_exceptions import NotFoundError
-            if isinstance(e, NotFoundError):
-                await self._notify_session_error()
+            await self._notify_auth_error_if_needed(e)
             raise
     
     async def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
@@ -228,9 +241,7 @@ class StarvellService:
         try:
             return await self.api.get_chats()
         except Exception as e:
-            from StarvellAPI.api_exceptions import NotFoundError
-            if isinstance(e, NotFoundError):
-                await self._notify_session_error()
+            await self._notify_auth_error_if_needed(e)
             raise
         
     async def get_unread_chats(self) -> List[Dict[str, Any]]:
@@ -241,9 +252,7 @@ class StarvellService:
         try:
             return await self.api.get_unread_chats()
         except Exception as e:
-            from StarvellAPI.api_exceptions import NotFoundError
-            if isinstance(e, NotFoundError):
-                await self._notify_session_error()
+            await self._notify_auth_error_if_needed(e)
             raise
         
     async def get_messages(
@@ -259,9 +268,7 @@ class StarvellService:
         try:
             return await self.api.get_messages(chat_id, interlocutor_id, limit)
         except Exception as e:
-            from StarvellAPI.api_exceptions import NotFoundError
-            if isinstance(e, NotFoundError):
-                await self._notify_session_error()
+            await self._notify_auth_error_if_needed(e)
             raise
         
     async def send_message(self, chat_id: str, content: str) -> Dict[str, Any]:
@@ -307,10 +314,7 @@ class StarvellService:
             orders = await self.api.get_all_orders()
             return orders if orders else []
         except Exception as e:
-            # Проверяем, является ли это ошибкой NotFound (обычно устаревшая сессия)
-            from StarvellAPI.api_exceptions import NotFoundError
-            if isinstance(e, NotFoundError):
-                await self._notify_session_error()
+            await self._notify_auth_error_if_needed(e)
             raise
     
     async def get_all_orders(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -331,9 +335,7 @@ class StarvellService:
             orders = await self.api.get_all_orders(status=status)
             return orders if orders else []
         except Exception as e:
-            from StarvellAPI.api_exceptions import NotFoundError
-            if isinstance(e, NotFoundError):
-                await self._notify_session_error()
+            await self._notify_auth_error_if_needed(e)
             raise
         
     async def refund_order(self, order_id: str) -> Dict[str, Any]:
@@ -398,9 +400,7 @@ class StarvellService:
                 
                 return result
             except Exception as e:
-                from StarvellAPI.api_exceptions import NotFoundError
-                if isinstance(e, NotFoundError):
-                    await self._notify_session_error()
+                await self._notify_auth_error_if_needed(e)
                 await self.db.add_bump_history(game_id, category_ids, False)
                 raise
                 
@@ -614,9 +614,7 @@ class StarvellService:
             offers = await self.api.get_user_offers(user_id)
             return offers
         except Exception as e:
-            from StarvellAPI.api_exceptions import NotFoundError
-            if isinstance(e, NotFoundError):
-                await self._notify_session_error()
+            await self._notify_auth_error_if_needed(e)
             raise RuntimeError(f"Ошибка получения лотов: {e}")
     
     async def get_lot_edit_data(self, lot_id: str) -> Dict[str, Any]:
