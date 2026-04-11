@@ -186,13 +186,6 @@ class BackgroundTasks:
                 payload.get("chatId"),
             )
             return
-        if event_name == "viewed_offer":
-            logger.debug(
-                "Socket: просмотрен лот %s пользователем %s",
-                (payload.get("offer") or {}).get("id"),
-                payload.get("buyerId"),
-            )
-
     async def _handle_socket_message(self, message: dict):
         chat_id = str(message.get("chatId") or "")
         if not chat_id:

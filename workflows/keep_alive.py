@@ -38,7 +38,7 @@ class KeepAliveService:
             return
 
         if getattr(self.starvell, "realtime_enabled", False):
-            logger.info("Сервис вечного онлайна пропущен: онлайн поддерживается через websocket")
+            logger.info("Сервис вечного онлайна пропущен: онлайн поддерживается через websocket namespace /online")
             self._running = False
             return
 

@@ -24,8 +24,6 @@ class StarSocketClient:
         "/online",
         "/chats",
         "/user-notifications",
-        "/user-presence",
-        "/viewed-offers",
     )
 
     def __init__(
@@ -77,7 +75,6 @@ class StarSocketClient:
         self.client.on("message_created", self._make_event_handler("/chats", "message_created"), namespace="/chats")
         self.client.on("chat_read", self._make_event_handler("/chats", "chat_read"), namespace="/chats")
         self.client.on("sale_update", self._make_event_handler("/user-notifications", "sale_update"), namespace="/user-notifications")
-        self.client.on("viewed_offer", self._make_event_handler("/viewed-offers", "viewed_offer"), namespace="/viewed-offers")
 
     def _make_connect_handler(self, namespace: str):
         async def handler():
