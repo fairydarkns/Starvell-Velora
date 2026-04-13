@@ -159,6 +159,16 @@ class BackgroundTasks:
             logger.info("Результат переподключения realtime socket: %s", "успешно" if ok else "ошибка")
             return
 
+        if not socket.healthy:
+            missing = ", ".join(socket.missing_namespaces) or "unknown"
+            logger.warning(
+                "Realtime socket Starvell в неполном состоянии, отсутствуют namespace: %s. Форсирую reconnect",
+                missing,
+            )
+            ok = await self.starvell.ensure_realtime_connected(force=True)
+            logger.info("Результат переподключения realtime socket: %s", "успешно" if ok else "ошибка")
+            return
+
         now = time.monotonic()
         idle_for = now - socket.last_activity_ts
         if idle_for >= REALTIME_HARD_RECONNECT_TIMEOUT:
