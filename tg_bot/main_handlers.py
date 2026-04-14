@@ -76,27 +76,110 @@ async def _delete_prompt_message(bot, chat_id: int | None, message_id: int | Non
         pass
 
 
+def _short_order_id(order_id: str) -> str:
+    clean_id = str(order_id or "").replace("-", "")
+    return clean_id[-8:].upper() if len(clean_id) >= 8 else clean_id.upper()
+
+
+def _system_notification_text(entry: dict) -> str:
+    metadata = entry.get("metadata") or {}
+    notification_type = str(metadata.get("notificationType") or "NOTIFICATION").upper()
+    order = entry.get("order") or {}
+    order_id = str(metadata.get("orderId") or order.get("id") or "").strip()
+    order_link = (
+        f'<a href="https://starvell.com/order/{order_id}">#{_short_order_id(order_id)}</a>'
+        if order_id
+        else "без заказа"
+    )
+
+    buyer = entry.get("buyer") or order.get("buyer") or {}
+    seller = entry.get("seller") or order.get("seller") or {}
+    buyer_name = escape(str(buyer.get("username") or buyer.get("nickname") or buyer.get("name") or "покупатель"))
+    seller_name = escape(str(seller.get("username") or seller.get("nickname") or seller.get("name") or "продавец"))
+
+    mapping = {
+        "ORDER_PAYMENT": (
+            "📦 <b>Новый заказ</b>",
+            f"Покупатель {buyer_name} оформил заказ {order_link}.",
+        ),
+        "ORDER_SELLER_COMPLETED": (
+            "⏳ <b>Заказ готов</b>",
+            f"Продавец {seller_name} отметил заказ {order_link} выполненным.",
+        ),
+        "ORDER_MARKED_COMPLETED": (
+            "⏳ <b>Заказ готов</b>",
+            f"Продавец {seller_name} отметил заказ {order_link} выполненным.",
+        ),
+        "ORDER_COMPLETED": (
+            "✅ <b>Заказ подтвержден</b>",
+            f"Покупатель {buyer_name} подтвердил выполнение заказа {order_link}.",
+        ),
+        "ORDER_CONFIRMED": (
+            "✅ <b>Заказ подтвержден</b>",
+            f"Покупатель {buyer_name} подтвердил выполнение заказа {order_link}.",
+        ),
+        "ORDER_REFUND": (
+            "💰 <b>Возврат средств</b>",
+            f"Продавец {seller_name} вернул деньги по заказу {order_link}.",
+        ),
+        "ORDER_REFUNDED": (
+            "💰 <b>Возврат средств</b>",
+            f"Продавец {seller_name} вернул деньги по заказу {order_link}.",
+        ),
+        "REVIEW_CREATED": (
+            "⭐ <b>Отзыв оставлен</b>",
+            f"Покупатель {buyer_name} оставил отзыв к заказу {order_link}.",
+        ),
+        "REVIEW_UPDATED": (
+            "✏️ <b>Отзыв обновлен</b>",
+            f"Покупатель {buyer_name} обновил отзыв к заказу {order_link}.",
+        ),
+        "REVIEW_DELETED": (
+            "🗑️ <b>Отзыв удален</b>",
+            f"Покупатель {buyer_name} удалил отзыв к заказу {order_link}.",
+        ),
+    }
+
+    title, description = mapping.get(
+        notification_type,
+        (
+            "⚙️ <b>Системное событие</b>",
+            f"{escape(notification_type)} по заказу {order_link}.",
+        ),
+    )
+    return f"• {title}\n{description}"
+
+
 def _format_chat_history_entry(entry: dict, my_user_id: str) -> str:
     message_type = str(entry.get("type") or "DEFAULT").upper()
     author = entry.get("author") or {}
     author_id = str(entry.get("authorId") or author.get("id") or "")
-    author_name = (
+
+    if message_type == "NOTIFICATION":
+        return _system_notification_text(entry)
+
+    author_roles = author.get("roles") or []
+    raw_name = (
         author.get("username")
         or author.get("nickname")
         or author.get("name")
-        or ("Вы" if my_user_id and author_id == my_user_id else author_id or "Система")
+        or (author_id or "Неизвестно")
     )
-    author_name = escape(str(author_name))
+    author_name = escape(str(raw_name))
 
-    if message_type == "NOTIFICATION":
-        metadata = entry.get("metadata") or {}
-        notification_type = escape(str(metadata.get("notificationType") or "NOTIFICATION"))
-        return f"• [{author_name}] <i>Системное событие: {notification_type}</i>"
+    if my_user_id and author_id == my_user_id:
+        label = "🛍️ <b>Продавец</b>"
+    elif any(role in {"SUPPORT", "MODERATOR", "ADMIN"} for role in author_roles):
+        label = "🛡️ <b>Поддержка</b>"
+    elif author_id:
+        label = f"👤 <b>Покупатель {author_name}</b>"
+    else:
+        label = "⚙️ <b>Система</b>"
 
     content = escape(str(entry.get("content") or entry.get("text") or "").strip())
     if not content:
         content = "<пусто>"
-    return f"• [{author_name}] {content}"
+    return f"• {label}: {content}"
 
 
 def _extract_offer_from_chat_page(chat_page: dict) -> dict:
