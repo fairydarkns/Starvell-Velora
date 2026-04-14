@@ -5,6 +5,7 @@
 import hashlib
 import asyncio
 import json
+from html import escape
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -64,6 +65,102 @@ def _safe_float(val, default=0.0):
 
 def _is_cancel_text(text: str | None) -> bool:
     return (text or "").strip() in {"-", "/cancel"}
+
+
+async def _delete_prompt_message(bot, chat_id: int | None, message_id: int | None) -> None:
+    if not chat_id or not message_id:
+        return
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+
+
+def _format_chat_history_entry(entry: dict, my_user_id: str) -> str:
+    message_type = str(entry.get("type") or "DEFAULT").upper()
+    author = entry.get("author") or {}
+    author_id = str(entry.get("authorId") or author.get("id") or "")
+    author_name = (
+        author.get("username")
+        or author.get("nickname")
+        or author.get("name")
+        or ("Вы" if my_user_id and author_id == my_user_id else author_id or "Система")
+    )
+    author_name = escape(str(author_name))
+
+    if message_type == "NOTIFICATION":
+        metadata = entry.get("metadata") or {}
+        notification_type = escape(str(metadata.get("notificationType") or "NOTIFICATION"))
+        return f"• [{author_name}] <i>Системное событие: {notification_type}</i>"
+
+    content = escape(str(entry.get("content") or entry.get("text") or "").strip())
+    if not content:
+        content = "<пусто>"
+    return f"• [{author_name}] {content}"
+
+
+def _extract_offer_from_chat_page(chat_page: dict) -> dict:
+    additional_data = chat_page.get("additionalData") or {}
+    viewed_offer = additional_data.get("viewedOffer")
+    if isinstance(viewed_offer, dict) and viewed_offer:
+        return viewed_offer
+
+    candidates = []
+    chat_result = chat_page.get("chatResult") or {}
+
+    for source in (chat_page, chat_result, additional_data):
+        if not isinstance(source, dict):
+            continue
+        candidates.extend([
+            source.get("offer"),
+            source.get("listing"),
+            source.get("selectedOffer"),
+            source.get("viewedOffer"),
+            source.get("offerDetails"),
+        ])
+        chat_blob = source.get("chat") or {}
+        if isinstance(chat_blob, dict):
+            candidates.extend([
+                chat_blob.get("offer"),
+                chat_blob.get("listing"),
+                chat_blob.get("selectedOffer"),
+                chat_blob.get("viewedOffer"),
+                chat_blob.get("offerDetails"),
+            ])
+
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate:
+            return candidate
+    return {}
+
+
+def _format_offer_summary(offer: dict) -> str:
+    if not offer:
+        return ""
+    title = (
+        offer.get("briefDescription")
+        or ((offer.get("descriptions") or {}).get("rus") or {}).get("briefDescription")
+        or ((offer.get("descriptions") or {}).get("rus") or {}).get("description")
+        or offer.get("name")
+        or offer.get("title")
+        or "Неизвестный товар"
+    )
+    offer_id = str(offer.get("id") or "").strip()
+    game_value = offer.get("game")
+    category_value = offer.get("category")
+    subcategory_value = offer.get("subCategory")
+    game_name = ((game_value.get("name") if isinstance(game_value, dict) else game_value) or "").strip()
+    category_name = ((category_value.get("name") if isinstance(category_value, dict) else category_value) or "").strip()
+    subcategory_name = ((subcategory_value.get("name") if isinstance(subcategory_value, dict) else subcategory_value) or "").strip()
+    title = escape(str(title))
+    parts = [part for part in (game_name, category_name) if part]
+    if subcategory_name:
+        parts.append(subcategory_name)
+    details = f" ({' / '.join(parts)})" if parts else ""
+    if offer_id:
+        offer_url = f"https://starvell.com/offers/{offer_id}"
+        return f'🛒 <b>Покупатель сейчас смотрит:</b> <a href="{offer_url}">{title}</a>{details}'
+    return f"🛒 <b>Покупатель сейчас смотрит:</b> {title}{details}"
 
 
 def _format_starvell_datetime(raw_value: str) -> str:
@@ -1815,13 +1912,9 @@ async def handle_reply_button(callback: CallbackQuery, state: FSMContext, **kwar
     """Обработка нажатия кнопки 'Ответить' в уведомлении"""
     # Извлекаем chat_id из callback data (формат: r:chat_id)
     chat_id = callback.data.split(":", 1)[1]
-    
-    # Сохраняем chat_id в состояние
-    await state.update_data(reply_chat_id=chat_id)
-    await state.set_state(ReplyState.waiting_for_reply)
-    
+
     await callback.answer()
-    await callback.message.answer(
+    prompt_message = await callback.message.answer(
         "✍️ <b>Быстрый ответ</b>\n\n"
         "Отправьте сообщение, которое хотите отправить пользователю.\n\n"
         "Для отмены используйте <code>/cancel</code> или <code>-</code>.",
@@ -1830,21 +1923,97 @@ async def handle_reply_button(callback: CallbackQuery, state: FSMContext, **kwar
         ]),
         parse_mode="HTML",
     )
+    
+    # Сохраняем chat_id и prompt-сообщение в состояние
+    await state.update_data(
+        reply_chat_id=chat_id,
+        reply_prompt_chat_id=prompt_message.chat.id,
+        reply_prompt_message_id=prompt_message.message_id,
+    )
+    await state.set_state(ReplyState.waiting_for_reply)
 
 
 @router.callback_query(F.data == "reply_cancel")
 async def handle_reply_cancel(callback: CallbackQuery, state: FSMContext):
     """Отмена быстрого ответа"""
+    data = await state.get_data()
     await state.clear()
     await callback.answer("Отменено")
-    await callback.message.delete()
+    await _delete_prompt_message(
+        callback.bot,
+        data.get("reply_prompt_chat_id"),
+        data.get("reply_prompt_message_id"),
+    )
+
+
+@router.callback_query(F.data.startswith("more:"))
+async def handle_more_button(callback: CallbackQuery, **kwargs):
+    """Показать последние сообщения по чату и, если доступно, текущий оффер."""
+    chat_id = callback.data.split(":", 1)[1]
+    starvell = kwargs.get("starvell")
+
+    if not starvell:
+        await callback.answer("❌ Сервис Starvell недоступен", show_alert=True)
+        return
+
+    try:
+        chats = await starvell.get_chats()
+        target_chat = next((chat for chat in chats if str(chat.get("id") or "") == chat_id), None)
+        if not target_chat:
+            await callback.answer("❌ Чат не найден", show_alert=True)
+            return
+
+        await callback.answer()
+        await starvell.get_user_info()
+        my_user_id = str((starvell.last_user_info.get("user") or {}).get("id") or "")
+
+        participants = target_chat.get("participants") or []
+        interlocutor_id = None
+        for participant in participants:
+            participant_id = str(participant.get("id") or "")
+            if participant_id and participant_id != my_user_id:
+                interlocutor_id = participant_id
+                break
+
+        if not interlocutor_id:
+            await callback.message.answer("❌ Не удалось определить собеседника для загрузки истории.")
+            return
+
+        chat_page = await starvell.get_chat_page(chat_id, interlocutor_id, limit=10)
+        messages = (chat_page.get("messagesListResult") or {}).get("items") or []
+        if not isinstance(messages, list):
+            messages = []
+
+        recent_messages = list(reversed(messages[:10]))
+        history_lines = [
+            _format_chat_history_entry(item, my_user_id)
+            for item in recent_messages
+            if isinstance(item, dict)
+        ]
+        if not history_lines:
+            history_lines = ["• История пуста"]
+
+        offer_text = _format_offer_summary(_extract_offer_from_chat_page(chat_page))
+
+        text = "📜 <b>Последние 10 сообщений</b>\n\n"
+        if offer_text:
+            text += offer_text + "\n\n"
+        text += "\n".join(history_lines)
+        await callback.message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        await callback.message.answer(f"❌ Ошибка загрузки истории чата: {e}")
 
 
 @router.message(ReplyState.waiting_for_reply)
 async def process_quick_reply(message: Message, state: FSMContext, **kwargs):
     """Обработка отправки быстрого ответа"""
+    data = await state.get_data()
+    prompt_chat_id = data.get("reply_prompt_chat_id")
+    prompt_message_id = data.get("reply_prompt_message_id")
+
     if _is_cancel_text(message.text):
         await state.clear()
+        await _delete_prompt_message(message.bot, prompt_chat_id, prompt_message_id)
         await message.answer("❌ Отменено")
         return
 
@@ -1857,7 +2026,6 @@ async def process_quick_reply(message: Message, state: FSMContext, **kwargs):
         return
     
     # Получаем сохраненный chat_id
-    data = await state.get_data()
     chat_id = data.get("reply_chat_id")
     
     if not chat_id:
@@ -1870,6 +2038,7 @@ async def process_quick_reply(message: Message, state: FSMContext, **kwargs):
         status_msg = await message.answer("📤 Отправка сообщения...")
         
         result = await starvell.send_message(chat_id, message.text)
+        await _delete_prompt_message(message.bot, prompt_chat_id, prompt_message_id)
         
         await status_msg.edit_text(
             "✅ <b>Сообщение отправлено!</b>\n\n"

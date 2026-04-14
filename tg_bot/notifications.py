@@ -266,6 +266,15 @@ class NotificationManager:
                     )
                 )
 
+            more_callback = f"more:{chat_id}"
+            if len(more_callback.encode('utf-8')) <= 64:
+                row1.append(
+                    InlineKeyboardButton(
+                        text="📜 Больше",
+                        callback_data=more_callback
+                    )
+                )
+
         # Проверяем количество заготовок
         template_manager = get_template_manager()
         templates_count = template_manager.count()
@@ -364,6 +373,15 @@ class NotificationManager:
                     InlineKeyboardButton(
                         text="💬 Ответить",
                         callback_data=reply_callback
+                    )
+                )
+
+            more_callback = f"more:{chat_id}"
+            if len(more_callback.encode('utf-8')) <= 64:
+                row1.append(
+                    InlineKeyboardButton(
+                        text="📜 Больше",
+                        callback_data=more_callback
                     )
                 )
 

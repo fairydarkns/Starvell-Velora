@@ -270,6 +270,22 @@ class StarvellService:
         except Exception as e:
             await self._notify_auth_error_if_needed(e)
             raise
+
+    async def get_chat_page(
+        self,
+        chat_id: str,
+        interlocutor_id: str,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """Получить полный chat-page со списком сообщений и additionalData/chatResult."""
+        if not self.api:
+            raise RuntimeError("API не инициализирован")
+
+        try:
+            return await self.api.get_chat_page(chat_id, interlocutor_id, limit=limit)
+        except Exception as e:
+            await self._notify_auth_error_if_needed(e)
+            raise
         
     async def send_message(self, chat_id: str, content: str) -> Dict[str, Any]:
         """Отправить сообщение в чат"""
