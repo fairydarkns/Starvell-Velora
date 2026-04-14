@@ -127,7 +127,7 @@ def _system_notification_text(entry: dict) -> str:
             f"Продавец {seller_name} вернул деньги по заказу {order_link}.",
         ),
         "REVIEW_CREATED": (
-            "⭐ <b>Отзыв оставлен</b>",
+            "⭐️ <b>Отзыв оставлен</b>",
             f"Покупатель {buyer_name} оставил отзыв к заказу {order_link}.",
         ),
         "REVIEW_UPDATED": (
@@ -135,7 +135,7 @@ def _system_notification_text(entry: dict) -> str:
             f"Покупатель {buyer_name} обновил отзыв к заказу {order_link}.",
         ),
         "REVIEW_DELETED": (
-            "🗑️ <b>Отзыв удален</b>",
+            "🗑 <b>Отзыв удален</b>",
             f"Покупатель {buyer_name} удалил отзыв к заказу {order_link}.",
         ),
     }
@@ -147,7 +147,7 @@ def _system_notification_text(entry: dict) -> str:
             f"{escape(notification_type)} по заказу {order_link}.",
         ),
     )
-    return f"• {title}\n{description}"
+    return f"{title}\n{description}"
 
 
 def _format_chat_history_entry(entry: dict, my_user_id: str) -> str:
@@ -168,18 +168,18 @@ def _format_chat_history_entry(entry: dict, my_user_id: str) -> str:
     author_name = escape(str(raw_name))
 
     if my_user_id and author_id == my_user_id:
-        label = "🛍️ <b>Продавец</b>"
+        label = f"🫵 <b>{author_name}</b>"
     elif any(role in {"SUPPORT", "MODERATOR", "ADMIN"} for role in author_roles):
-        label = "🛡️ <b>Поддержка</b>"
+        label = f"🛡️ <b>{author_name}</b>"
     elif author_id:
-        label = f"👤 <b>Покупатель {author_name}</b>"
+        label = f"👤 <b>{author_name}</b>"
     else:
         label = "⚙️ <b>Система</b>"
 
     content = escape(str(entry.get("content") or entry.get("text") or "").strip())
     if not content:
         content = "<пусто>"
-    return f"• {label}: {content}"
+    return f"{label}: {content}"
 
 
 def _extract_offer_from_chat_page(chat_page: dict) -> dict:
@@ -2074,14 +2074,14 @@ async def handle_more_button(callback: CallbackQuery, **kwargs):
             if isinstance(item, dict)
         ]
         if not history_lines:
-            history_lines = ["• История пуста"]
+            history_lines = ["История пуста"]
 
         offer_text = _format_offer_summary(_extract_offer_from_chat_page(chat_page))
 
         text = "📜 <b>Последние 10 сообщений</b>\n\n"
         if offer_text:
             text += offer_text + "\n\n"
-        text += "\n".join(history_lines)
+        text += "\n\n".join(history_lines)
         await callback.message.answer(text, parse_mode="HTML")
     except Exception as e:
         await callback.message.answer(f"❌ Ошибка загрузки истории чата: {e}")
