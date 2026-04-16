@@ -311,6 +311,11 @@ class BackgroundTasks:
                 )
             else:
                 logger.debug("Не нашел review в деталях заказа %s для REVIEW_CREATED", order_id)
+            if self.auto_response:
+                try:
+                    await self.auto_response.process_review_created(order_id, order=order, review=review or None)
+                except Exception as e:
+                    logger.warning("Не удалось отправить автоответ на отзыв по заказу %s: %s", order_id, e)
             return
 
         if notification_type in review_deleted_types:

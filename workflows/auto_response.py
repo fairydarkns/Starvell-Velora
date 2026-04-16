@@ -21,6 +21,19 @@ class AutoResponseService:
         # Отслеживание уже обработанных заказов
         self._confirmed_orders: Set[str] = set()
         self._reviewed_orders: Set[str] = set()
+
+    @staticmethod
+    def _extract_chat_id(order_details: Dict, order: Optional[Dict] = None) -> Optional[str]:
+        page_props = order_details.get("pageProps", {}) if isinstance(order_details, dict) else {}
+        if "chat" in page_props and isinstance(page_props["chat"], dict):
+            chat_id = page_props["chat"].get("id")
+            if chat_id:
+                return str(chat_id)
+        if order:
+            chat_id = order.get("chatId") or order.get("chat_id")
+            if chat_id:
+                return str(chat_id)
+        return None
         
     async def start(self):
         """Запуск сервиса"""
@@ -183,40 +196,51 @@ class AutoResponseService:
                 return
         
         try:
-            # Получаем детали заказа для получения chat_id
-            order_details = await self.starvell.get_order_details(order_id)
-            
-            # Извлекаем chat_id
-            chat_id = None
-            page_props = order_details.get("pageProps", {})
-            
-            # Пробуем разные варианты
-            if "chat" in page_props and isinstance(page_props["chat"], dict):
-                chat_id = page_props["chat"].get("id")
-            elif "chatId" in order:
-                chat_id = order.get("chatId")
-            elif "chat_id" in order:
-                chat_id = order.get("chat_id")
-                
-            if not chat_id:
-                logger.warning(f"Не удалось найти chat_id для заказа {order_id} (отзыв)")
-                # Помечаем как обработанный, чтобы не спамить логи
-                self._reviewed_orders.add(order_id)
-                return
-            
-            # Получаем информацию об отзыве
-            rating = review.get("rating", "N/A")
-            comment = review.get("comment", "")
-            
-            # Отправляем ответ
-            response_text = BotConfig.REVIEW_RESPONSE_TEXT()
-            await self.starvell.send_message(chat_id, response_text)
-            
-            # Помечаем как обработанный
-            self._reviewed_orders.add(order_id)
-            
-            logger.info(f"⭐ Отправлен автоответ на отзыв (рейтинг: {rating}) для заказа {order_id[:8]}")
-            
+            await self.process_review_created(order_id, order=order, review=review)
         except Exception as e:
             logger.error(f"Ошибка при отправке ответа на отзыв для заказа {order_id}: {e}")
             # Не добавляем в обработанные, чтобы попробовать ещё раз
+
+    async def process_review_created(self, order_id: str, order: Optional[Dict] = None, review: Optional[Dict] = None):
+        """
+        Немедленно обработать новый отзыв.
+        Используется из websocket-ветки и как общий helper для polling.
+        """
+        if not BotConfig.REVIEW_RESPONSE_ENABLED():
+            return
+        if not order_id or order_id in self._reviewed_orders:
+            return
+
+        order = order or {}
+        buyer_id = order.get("buyerId") or order.get("buyer_id")
+        if buyer_id:
+            config = get_config_manager()
+            blacklist_section = f"Blacklist.{buyer_id}"
+            if config._config.has_section(blacklist_section):
+                logger.debug(f"Автоответ на отзыв заказа {order_id[:8]} пропущен (покупатель {buyer_id} в ЧС)")
+                self._reviewed_orders.add(order_id)
+                return
+
+        order_details = await self.starvell.get_order_details(order_id)
+        if not review:
+            review = self.starvell.extract_review_from_order_details(order_details)
+        if not review:
+            logger.warning("Не удалось найти review в деталях заказа %s для автоответа", order_id)
+            return
+
+        if review.get("reviewResponse"):
+            self._reviewed_orders.add(order_id)
+            logger.debug("Автоответ на отзыв заказа %s пропущен: ответ уже существует", order_id[:8])
+            return
+
+        chat_id = self._extract_chat_id(order_details, order=order)
+        if not chat_id:
+            logger.warning(f"Не удалось найти chat_id для заказа {order_id} (отзыв)")
+            return
+
+        response_text = BotConfig.REVIEW_RESPONSE_TEXT()
+        await self.starvell.send_message(chat_id, response_text)
+        self._reviewed_orders.add(order_id)
+
+        rating = review.get("rating", "N/A")
+        logger.info(f"⭐ Отправлен автоответ на отзыв (рейтинг: {rating}) для заказа {order_id[:8]}")
