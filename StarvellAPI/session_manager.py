@@ -8,6 +8,7 @@ import aiohttp
 from aiohttp import BasicAuth, ClientTimeout, ClientResponseError
 
 from .api_config import Config
+from .api_utils import extract_sid_from_cookies
 from .api_exceptions import (
     StarAPIError,
     AuthenticationError,
@@ -26,6 +27,8 @@ class SessionManager:
         self.config = config
         self._session: Optional[aiohttp.ClientSession] = None
         self._sid_cookie: Optional[str] = None
+        self._guard_ready = False
+        self._guard_warming = False
         
     async def __aenter__(self):
         await self.start()
@@ -39,6 +42,7 @@ class SessionManager:
         if self._session is None or self._session.closed:
             timeout = ClientTimeout(total=self.config.timeout)
             self._session = aiohttp.ClientSession(timeout=timeout)
+        await self._ensure_guard_cookies()
             
     async def close(self):
         """Закрыть сессию"""
@@ -46,7 +50,13 @@ class SessionManager:
             await self._session.close()
             self._session = None
             
-    def _get_headers(self, referer: str = None, extra: Dict[str, str] = None) -> Dict[str, str]:
+    def _get_headers(
+        self,
+        referer: str = None,
+        extra: Dict[str, str] = None,
+        *,
+        json_body: bool = False,
+    ) -> Dict[str, str]:
         """Получить заголовки для запроса"""
         headers = {
             "accept": "*/*",
@@ -56,11 +66,80 @@ class SessionManager:
         
         if referer:
             headers["referer"] = referer
+            if json_body and "origin" not in (extra or {}):
+                headers["origin"] = self.config.BASE_URL
             
         if extra:
             headers.update(extra)
             
         return headers
+
+    @staticmethod
+    def _is_session_rejected(status: int, body: str) -> bool:
+        """Определить, отклонил ли Starvell именно session cookie."""
+        if status == 401:
+            return True
+        if status != 403:
+            return False
+
+        text = (body or "").strip()
+        if "SESSION_NOT_FOUND" in text:
+            return True
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return False
+
+        if not isinstance(data, dict):
+            return False
+
+        nested = data.get("data")
+        if isinstance(nested, dict) and nested.get("code") == "SESSION_NOT_FOUND":
+            return True
+        return False
+
+    @staticmethod
+    def _auth_error_message(body: str) -> str:
+        if "SESSION_NOT_FOUND" in body:
+            return (
+                "Сессия Starvell не найдена (SESSION_NOT_FOUND). "
+                "Обновите session_cookie из браузера."
+            )
+        return "Неверный session cookie"
+
+    async def _ensure_guard_cookies(self) -> None:
+        """Прогреть anti-bot cookies DDoS-Guard перед рабочими запросами."""
+        if self._guard_ready or self._guard_warming:
+            return
+
+        if self._session is None:
+            await self.start()
+
+        self._guard_warming = True
+        proxy, proxy_auth = self._get_proxy()
+        try:
+            async with self._session.request(
+                "GET",
+                f"{self.config.BASE_URL}/",
+                headers=self._get_headers(
+                    None,
+                    {
+                        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    },
+                ),
+                cookies=self._get_cookies(False),
+                proxy=proxy,
+                proxy_auth=proxy_auth,
+            ) as resp:
+                if resp.status < 500:
+                    await resp.text()
+                    self._guard_ready = True
+        except Exception:
+            # Не блокируем запуск: рабочие запросы попробуют прогреть cookie снова.
+            pass
+        finally:
+            self._guard_warming = False
         
     def _get_cookies(self, include_sid: bool = False) -> Dict[str, str]:
         """Получить cookies для запроса"""
@@ -80,6 +159,15 @@ class SessionManager:
         
     def get_sid(self) -> Optional[str]:
         """Получить SID cookie"""
+        return self._sid_cookie
+
+    def sync_sid_from_jar(self) -> Optional[str]:
+        """Подхватить sid из cookie jar после ответов Starvell."""
+        if self._session is None:
+            return self._sid_cookie
+        sid = extract_sid_from_cookies(self._session)
+        if sid:
+            self._sid_cookie = sid
         return self._sid_cookie
 
     def build_cookie_header(self, include_sid: bool = False) -> str:
@@ -106,6 +194,8 @@ class SessionManager:
         """GET запрос с получением JSON"""
         if self._session is None:
             await self.start()
+        if not self._guard_ready:
+            await self._ensure_guard_cookies()
             
         retry_count = self.config.max_retries
         request_headers = self._get_headers(referer, headers)
@@ -124,9 +214,18 @@ class SessionManager:
                     proxy=proxy,
                     proxy_auth=proxy_auth,
                 ) as resp:
-                    # Обработка статус кодов
                     if resp.status in (401, 403):
-                        raise AuthenticationError("Неверный session cookie")
+                        body = await resp.text()
+                        if self._is_session_rejected(resp.status, body):
+                            raise AuthenticationError(self._auth_error_message(body))
+                        if resp.status == 403:
+                            try:
+                                return json.loads(body)
+                            except json.JSONDecodeError:
+                                raise StarAPIError(
+                                    "Starvell вернул 403 без JSON. "
+                                    "Возможна блокировка IP/DDoS-Guard или закрытый endpoint."
+                                )
                     elif resp.status == 404:
                         raise NotFoundError(f"Ресурс не найден: {url}")
                     elif resp.status == 429:
@@ -167,11 +266,13 @@ class SessionManager:
         """POST запрос с отправкой и получением JSON"""
         if self._session is None:
             await self.start()
+        if not self._guard_ready:
+            await self._ensure_guard_cookies()
             
         retry_count = self.config.max_retries
         headers = headers or {}
         headers["content-type"] = "application/json"
-        request_headers = self._get_headers(referer, headers)
+        request_headers = self._get_headers(referer, headers, json_body=True)
         cookies = self._get_cookies(include_sid)
         proxy, proxy_auth = self._get_proxy()
         
@@ -205,7 +306,9 @@ class SessionManager:
                     if resp.status == 400:
                         raise StarAPIError(f"Bad Request (400): {error_message}")
                     elif resp.status in (401, 403):
-                        raise AuthenticationError("Неверный session cookie")
+                        if self._is_session_rejected(resp.status, error_message):
+                            raise AuthenticationError(self._auth_error_message(error_message))
+                        raise StarAPIError(f"Доступ запрещён ({resp.status}): {error_message}")
                     elif resp.status == 404:
                         raise NotFoundError(f"Ресурс не найден: {url}")
                     elif resp.status == 429:
@@ -251,6 +354,8 @@ class SessionManager:
         """GET запрос с получением текста"""
         if self._session is None:
             await self.start()
+        if not self._guard_ready:
+            await self._ensure_guard_cookies()
             
         retry_count = self.config.max_retries
         request_headers = self._get_headers(referer, headers)
@@ -269,9 +374,14 @@ class SessionManager:
                     proxy=proxy,
                     proxy_auth=proxy_auth,
                 ) as resp:
-                    # Обработка статус кодов
                     if resp.status in (401, 403):
-                        raise AuthenticationError("Неверный session cookie")
+                        body = await resp.text()
+                        if self._is_session_rejected(resp.status, body):
+                            raise AuthenticationError(self._auth_error_message(body))
+                        raise StarAPIError(
+                            "Starvell вернул 403 при загрузке HTML. "
+                            "Проверьте IP/прокси или повторите запрос позже."
+                        )
                     elif resp.status == 404:
                         raise NotFoundError(f"Ресурс не найден: {url}")
                     elif resp.status == 429:

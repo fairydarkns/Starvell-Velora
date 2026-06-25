@@ -625,9 +625,10 @@ class StarvellService:
                 raise RuntimeError("Не удалось получить ID пользователя")
             
             user_id = user.get("id")
+            username = user.get("username")
             
             # Получаем офферы этого пользователя
-            offers = await self.api.get_user_offers(user_id)
+            offers = await self.api.get_user_offers(user_id, username=username)
             return offers
         except Exception as e:
             await self._notify_auth_error_if_needed(e)

@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 from .api_config import Config
 from .session_manager import SessionManager
 from .api_utils import BuildIdCache, extract_build_id, extract_sid_from_cookies
-from .api_exceptions import NotFoundError
+from .api_exceptions import AuthenticationError, NotFoundError
 
 logger = logging.getLogger("API")
 
@@ -142,6 +142,7 @@ class StarAPI:
                     headers={"x-nextjs-data": "1"},
                     include_sid=include_sid,
                 )
+                self.session.sync_sid_from_jar()
                 
                 return data
                 
@@ -156,10 +157,56 @@ class StarAPI:
         
     # ==================== Аутентификация ====================
 
-    async def _get_user_profile_page(self, user_id: int | str) -> Dict[str, Any]:
+    async def _get_profile_page_by_username(self, username: str) -> Dict[str, Any]:
+        safe_username = str(username).strip()
+        return await self._get_next_data(
+            f"profile/{safe_username}.json",
+            params=f"?username={safe_username}",
+            include_sid=True,
+        )
+
+    async def _resolve_username(
+        self,
+        user_id: int | str,
+        username: Optional[str] = None,
+    ) -> Optional[str]:
+        candidate = str(username or "").strip()
+        if candidate:
+            return candidate
+
+        try:
+            index_data = await self._get_next_data("index.json", include_sid=True)
+            index_user = (index_data.get("pageProps") or {}).get("user") or {}
+            if str(index_user.get("id")) == str(user_id):
+                resolved = str(index_user.get("username") or "").strip()
+                if resolved:
+                    return resolved
+        except Exception as exc:
+            logger.debug("Не удалось получить username из index.json: %s", exc)
+
+        return None
+
+    async def _get_user_profile_page(
+        self,
+        user_id: int | str,
+        username: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        resolved_username = await self._resolve_username(user_id, username)
+        if resolved_username:
+            try:
+                return await self._get_profile_page_by_username(resolved_username)
+            except Exception as exc:
+                logger.debug(
+                    "profile/%s.json недоступен, пробую users/%s.json: %s",
+                    resolved_username,
+                    user_id,
+                    exc,
+                )
+
         return await self._get_next_data(
             f"users/{user_id}.json",
             params=f"?user_id={user_id}",
+            include_sid=True,
         )
 
     @staticmethod
@@ -185,6 +232,92 @@ class StarAPI:
             if isinstance(source, list):
                 return source, key
         return [], "unknown"
+
+    @staticmethod
+    def _extract_offer_game_category(offer: Dict[str, Any]) -> tuple[Optional[int], Optional[int]]:
+        game_id = offer.get("gameId")
+        category_id = offer.get("categoryId")
+        if game_id is None:
+            game = offer.get("game") or {}
+            if isinstance(game, dict):
+                game_id = game.get("id")
+        if category_id is None:
+            category = offer.get("category") or {}
+            if isinstance(category, dict):
+                category_id = category.get("id")
+        try:
+            return (
+                int(game_id) if game_id is not None else None,
+                int(category_id) if category_id is not None else None,
+            )
+        except (TypeError, ValueError):
+            return None, None
+
+    @classmethod
+    def _group_categories_from_offers(cls, offers: List[Dict[str, Any]]) -> Dict[int, List[int]]:
+        game_categories: Dict[int, List[int]] = {}
+        for offer in offers:
+            if not isinstance(offer, dict):
+                continue
+            game_id, category_id = cls._extract_offer_game_category(offer)
+            if not game_id or not category_id:
+                continue
+            game_categories.setdefault(game_id, [])
+            if category_id not in game_categories[game_id]:
+                game_categories[game_id].append(category_id)
+        return game_categories
+
+    @classmethod
+    def _group_categories_from_profile(cls, categories: List[Dict[str, Any]]) -> Dict[int, List[int]]:
+        game_categories: Dict[int, List[int]] = {}
+        for category in categories:
+            if not isinstance(category, dict):
+                continue
+            game_id = category.get("gameId") or (category.get("game") or {}).get("id")
+            category_id = category.get("id")
+            offers = category.get("offers") or []
+            try:
+                game_id = int(game_id) if game_id is not None else None
+                category_id = int(category_id) if category_id is not None else None
+            except (TypeError, ValueError):
+                continue
+            if game_id and category_id and offers:
+                game_categories.setdefault(game_id, [])
+                if category_id not in game_categories[game_id]:
+                    game_categories[game_id].append(category_id)
+        return game_categories
+
+    @classmethod
+    def _group_categories_from_sells_games(cls, games: List[Dict[str, Any]]) -> Dict[int, List[int]]:
+        game_categories: Dict[int, List[int]] = {}
+        for game in games:
+            if not isinstance(game, dict):
+                continue
+            try:
+                game_id = int(game.get("id"))
+            except (TypeError, ValueError):
+                continue
+            for category in game.get("categories") or []:
+                if not isinstance(category, dict):
+                    continue
+                offers = category.get("offers") or []
+                try:
+                    category_id = int(category.get("id"))
+                except (TypeError, ValueError):
+                    continue
+                if category_id and offers:
+                    game_categories.setdefault(game_id, [])
+                    if category_id not in game_categories[game_id]:
+                        game_categories[game_id].append(category_id)
+        return game_categories
+
+    async def _fetch_user_offers_via_api(self, user_id: int) -> List[Dict[str, Any]]:
+        data = await self.session.post_json(
+            f"{self.config.API_URL}/offers/list",
+            data={"dbFilter": {"userId": int(user_id), "categoryId": []}},
+            referer=f"{self.config.BASE_URL}/users/{user_id}",
+        )
+        return data if isinstance(data, list) else []
     
     async def get_user_info(self) -> Dict[str, Any]:
         """
@@ -198,7 +331,7 @@ class StarAPI:
         index_user = index_page_props.get("user") or {}
 
         # Получаем SID для дальнейших запросов.
-        sid = index_page_props.get("sid")
+        sid = index_page_props.get("sid") or self.session.sync_sid_from_jar()
         if sid:
             self.session.set_sid(sid)
 
@@ -211,6 +344,9 @@ class StarAPI:
             wallet_user = wallet_page_props.get("user") or {}
             if wallet_user:
                 user = dict(wallet_user)
+            sid = sid or self.session.sync_sid_from_jar()
+            if sid:
+                self.session.set_sid(sid)
         except Exception as exc:  # noqa: BLE001
             logger.debug("Не удалось получить wallet.json, использую index.json для профиля: %s", exc)
 
@@ -235,18 +371,23 @@ class StarAPI:
             "theme": theme,
         }
     
-    async def get_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
+    async def get_user_profile(
+        self,
+        user_id: str,
+        username: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Получить профиль пользователя по ID
         
         Args:
             user_id: ID пользователя в Starvell
+            username: Username Starvell, если уже известен
             
         Returns:
             dict: Данные профиля (nickname, name, id и др.) или None если не найден
         """
         try:
-            data = await self._get_user_profile_page(user_id)
+            data = await self._get_user_profile_page(user_id, username=username)
             page_props = data.get("pageProps", {})
             user_data = self._extract_user_profile_user(page_props)
             if user_data:
@@ -423,12 +564,29 @@ class StarAPI:
         payload = {"filter": {}}
         if status:
             payload["filter"]["status"] = status
-        
-        all_orders = await self.session.post_json(
-            f"{self.config.API_URL}/orders/list",
-            data=payload,
-            referer=f"{self.config.BASE_URL}/account/sells",
-        )
+
+        all_orders: List[Dict[str, Any]] = []
+        try:
+            data = await self.session.post_json(
+                f"{self.config.API_URL}/orders/list",
+                data=payload,
+                referer=f"{self.config.BASE_URL}/account/sells",
+            )
+            if isinstance(data, list):
+                all_orders = data
+        except AuthenticationError:
+            raise
+        except Exception as exc:
+            logger.debug("api/orders/list недоступен, fallback на account/sells.json: %s", exc)
+            try:
+                sells_data = await self._get_next_data("account/sells.json")
+                page_props = sells_data.get("pageProps", {})
+                recent_orders = page_props.get("orders", [])
+                if isinstance(recent_orders, list):
+                    all_orders = recent_orders
+            except Exception as fallback_exc:
+                logger.debug("Fallback account/sells.json тоже недоступен: %s", fallback_exc)
+                raise exc from fallback_exc
         
         if not isinstance(all_orders, list):
             all_orders = []
@@ -661,16 +819,11 @@ class StarAPI:
         """
         logger.debug(f"🚀 Отправка запроса на поднятие: game_id={game_id}, categories={category_ids}")
         
-        # Убедимся, что у нас есть SID перед запросом поднятия
-        if not self.session.get_sid():
-            logger.debug("⚠️ SID отсутствует, получаем его через user_info...")
-            await self.get_user_info()
-        
         response = await self.session.post_json(
             f"{self.config.API_URL}/offers/bump",
             data={"gameId": game_id, "categoryIds": category_ids},
             referer=referer or self.config.BASE_URL,
-            include_sid=True,
+            include_sid=bool(self.session.get_sid()),
         )
         
         logger.debug(f"📨 Ответ API на поднятие: {response}")
@@ -682,7 +835,11 @@ class StarAPI:
         
     # ==================== Пользователи ====================
     
-    async def get_user_offers(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_user_offers(
+        self,
+        user_id: int,
+        username: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
         Получить все офферы пользователя
         
@@ -692,57 +849,77 @@ class StarAPI:
         Returns:
             list: Список офферов пользователя
         """
-        logger.debug("🔍 Запрашиваю список лотов пользователя %s через Next Data...", user_id)
+        logger.debug("🔍 Запрашиваю список лотов пользователя %s...", user_id)
 
-        data = await self._get_user_profile_page(user_id)
-        page_props = data.get("pageProps", {})
-        categories, source_key = self._extract_user_profile_categories(page_props)
+        try:
+            data = await self._get_user_profile_page(user_id, username=username)
+            page_props = data.get("pageProps", {})
+            if not page_props.get("error"):
+                categories, source_key = self._extract_user_profile_categories(page_props)
+                if categories:
+                    logger.debug("📊 Источник лотов: %s", source_key)
+                    offers = []
+                    for category in categories:
+                        category_offers = category.get("offers", [])
+                        for offer in category_offers:
+                            if not isinstance(offer, dict):
+                                continue
+                            offer_id = offer.get("id")
+                            price = offer.get("price")
+                            availability = offer.get("availability")
+                            descriptions = offer.get("descriptions") or {}
+                            brief = (descriptions.get("rus") or {}).get("briefDescription")
+                            title = brief or offer.get("title") or offer.get("name")
+                            offers.append({
+                                "id": offer_id,
+                                "title": title,
+                                "availability": availability,
+                                "price": price,
+                                "url": f"{self.config.BASE_URL}/offers/{offer_id}" if offer_id else None,
+                            })
+                    if offers:
+                        return offers
+        except AuthenticationError:
+            raise
+        except Exception as exc:
+            logger.debug("profile.json недоступен для пользователя %s: %s", user_id, exc)
 
-        if not categories:
-            logger.warning("⚠️ Не удалось найти userProfileOffers в Next Data для пользователя %s", user_id)
-            logger.debug("📊 Ключи pageProps: %s", list(page_props.keys()))
-            bff = page_props.get("bff") or {}
-            if isinstance(bff, dict):
-                logger.debug("📊 Ключи pageProps.bff: %s", list(bff.keys()))
-            return []
+        try:
+            offers = await self._fetch_user_offers_via_api(user_id)
+            if offers:
+                normalized_offers = []
+                for offer in offers:
+                    if not isinstance(offer, dict):
+                        continue
+                    offer_id = offer.get("id")
+                    price = offer.get("price")
+                    availability = offer.get("availability")
+                    descriptions = offer.get("descriptions") or {}
+                    brief = (descriptions.get("rus") or {}).get("briefDescription")
+                    title = brief or offer.get("title") or offer.get("name")
+                    normalized_offers.append({
+                        "id": offer_id,
+                        "title": title,
+                        "availability": availability,
+                        "price": price,
+                        "url": f"{self.config.BASE_URL}/offers/{offer_id}" if offer_id else None,
+                    })
+                if normalized_offers:
+                    logger.debug("📊 Источник лотов: api/offers/list")
+                    return normalized_offers
+        except AuthenticationError:
+            raise
+        except Exception as exc:
+            logger.debug("api/offers/list недоступен для пользователя %s: %s", user_id, exc)
 
-        logger.debug("📊 Источник офферов: %s", source_key)
-        logger.debug("📊 Найдено категорий: %s", len(categories))
-        
-        offers = []
-        for category in categories:
-            category_offers = category.get("offers", [])
-            logger.debug(f"  - Категория: {len(category_offers)} лотов")
-            
-            for offer in category_offers:
-                offer_id = offer.get("id")
-                price = offer.get("price")
-                availability = offer.get("availability")
-                
-                # Формируем название
-                descriptions = offer.get("descriptions") or {}
-                brief = (descriptions.get("rus") or {}).get("briefDescription")
-                if not brief:
-                    brief = offer.get("title") or offer.get("name")
-                if not brief:
-                    brief = category.get("name")
-                attrs = offer.get("attributes", [])
-                labels = [a.get("valueLabel") for a in attrs if a.get("valueLabel")]
-                title_parts = [p for p in [brief, *labels] if p]
-                title = ", ".join(title_parts) if title_parts else None
-                
-                offers.append({
-                    "id": offer_id,
-                    "title": title,
-                    "availability": availability,
-                    "price": price,
-                    "url": f"{self.config.BASE_URL}/offers/{offer_id}" if offer_id else None,
-                })
-        
-        logger.debug(f"✅ Всего собрано лотов: {len(offers)}")
-        return offers
+        logger.warning("⚠️ Не удалось найти лоты пользователя %s", user_id)
+        return []
     
-    async def get_user_categories(self, user_id: int) -> Dict[int, List[int]]:
+    async def get_user_categories(
+        self,
+        user_id: int,
+        username: Optional[str] = None,
+    ) -> Dict[int, List[int]]:
         """
         Получить все категории с лотами пользователя, сгруппированные по играм
         
@@ -752,40 +929,50 @@ class StarAPI:
         Returns:
             dict: Словарь {game_id: [category_ids]} - все категории пользователя по играм
         """
-        logger.debug("🔍 Запрашиваю категории пользователя %s через Next Data...", user_id)
+        logger.debug("🔍 Запрашиваю категории пользователя %s...", user_id)
 
-        data = await self._get_user_profile_page(user_id)
-        page_props = data.get("pageProps", {})
-        categories, source_key = self._extract_user_profile_categories(page_props)
+        try:
+            data = await self._get_user_profile_page(user_id, username=username)
+            page_props = data.get("pageProps", {})
+            if not page_props.get("error"):
+                categories, source_key = self._extract_user_profile_categories(page_props)
+                game_categories = self._group_categories_from_profile(categories)
+                if game_categories:
+                    logger.debug("📊 Источник категорий: %s", source_key)
+                    return game_categories
+        except AuthenticationError:
+            raise
+        except Exception as exc:
+            logger.debug("profile.json недоступен для пользователя %s: %s", user_id, exc)
 
-        logger.debug("📊 Источник категорий: %s", source_key)
-        logger.debug("📊 Всего категорий профиля: %s", len(categories))
-        logger.debug("📊 Ключи pageProps: %s", list(page_props.keys()))
-        
-        # Группируем категории по играм
-        game_categories = {}
-        for idx, category in enumerate(categories):
-            logger.debug(f"  - Категория #{idx}: ключи={list(category.keys())}")
-            
-            game_id = category.get("gameId")
-            category_id = category.get("id")  # ID самой категории
-            offers = category.get("offers", [])
-            offer_count = len(offers)
-            
-            logger.debug(f"    gameId={game_id}, categoryId={category_id}, offers={offer_count}")
-            
-            if game_id and category_id and offer_count > 0:
-                if game_id not in game_categories:
-                    game_categories[game_id] = []
-                if category_id not in game_categories[game_id]:
-                    game_categories[game_id].append(category_id)
-                    logger.debug(f"    ✅ Добавлено сопоставление: game {game_id} -> category {category_id}")
-                    
-        logger.debug(f"📦 Найдено игр: {len(game_categories)}")
-        for game_id, cat_ids in game_categories.items():
-            logger.debug(f"  🎮 Игра {game_id}: категории {cat_ids}")
-            
-        return game_categories
+        try:
+            offers = await self._fetch_user_offers_via_api(user_id)
+            game_categories = self._group_categories_from_offers(offers)
+            if game_categories:
+                logger.debug("📊 Источник категорий: api/offers/list (%s лотов)", len(offers))
+                return game_categories
+        except AuthenticationError:
+            raise
+        except Exception as exc:
+            logger.debug("api/offers/list недоступен для пользователя %s: %s", user_id, exc)
+
+        try:
+            data = await self._get_next_data("account/sells.json")
+            page_props = data.get("pageProps", {})
+            game_categories = self._group_categories_from_sells_games(page_props.get("games") or [])
+            if game_categories:
+                logger.debug("📊 Источник категорий: account/sells.json games")
+                return game_categories
+        except AuthenticationError:
+            raise
+        except Exception as exc:
+            logger.debug("account/sells.json недоступен для пользователя %s: %s", user_id, exc)
+
+        logger.warning(
+            "⚠️ Не удалось определить категории пользователя %s через profile/offers/sells endpoint'ы Starvell",
+            user_id,
+        )
+        return {}
     
     # ==================== Поддержка онлайна ====================
     

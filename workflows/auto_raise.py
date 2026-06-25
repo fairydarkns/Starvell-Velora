@@ -160,14 +160,19 @@ class AutoRaiseService:
         try:
             # Получаем ID пользователя
             user_info = await self.starvell.get_user_info()
-            user_id = user_info.get("user", {}).get("id")
+            user = user_info.get("user", {}) or {}
+            user_id = user.get("id")
+            username = user.get("username")
             
             if not user_id:
                 logger.error("❌ Не удалось получить ID пользователя")
                 return current_time + 300  # Попробуем через 5 минут
             
             # Получаем все категории пользователя автоматически
-            game_categories = await self.starvell.api.get_user_categories(user_id)
+            game_categories = await self.starvell.api.get_user_categories(
+                user_id,
+                username=username,
+            )
             
             if not game_categories:
                 logger.warning("📭 Не найдено категорий с лотами")
